@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pathToFileURL } from 'node:url';
 import { ensureApralabs } from '../workflows/boilerplate/ensure-apralabs.mjs';
 import { createChatApp } from './app.mjs';
 
