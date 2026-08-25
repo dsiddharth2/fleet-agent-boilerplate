@@ -79,7 +79,8 @@ POST /chat → authenticate → validate message
 ```
 
 - Routing match: DOER's trimmed reply compared case-insensitively against registry
-  names; anything else (including `NONE`) → direct answer. Garbage in, fallback out.
+  names; NONE or an unrecognized name → direct answer (garbage in, fallback out). An
+  `isError` classification result is NOT a fallback — it throws and surfaces as 502.
 - Workflow adapters receive `history` for future use; they are not required to use it.
 - A failed exchange (any 502) is NOT recorded in session history.
 

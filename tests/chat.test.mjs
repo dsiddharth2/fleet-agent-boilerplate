@@ -382,3 +382,27 @@ test('an injected authenticate middleware can reject requests', async () => {
     assert.equal(fleetApi.promptCalls.length, 0);
   });
 });
+
+test('502 when the routing classification is an error payload, with no second LLM call', async () => {
+  const promptCalls = [];
+  const fleetApi = {
+    promptCalls,
+    async executePrompt(options) {
+      promptCalls.push(options);
+      return {
+        content: [{ type: 'text', text: 'OAuth session expired' }],
+        structuredContent: { isError: true, reason: 'auth' },
+      };
+    },
+  };
+  const registry = [
+    { name: 'demo', description: 'demo workflow', run: async () => 'never runs' },
+  ];
+  const app = createChatApp({ fleetApi, registry });
+  await withServer(app, async (base) => {
+    const res = await postChat(base, { message: 'run the demo', sessionId: 'err-session' });
+    assert.equal(res.status, 502);
+    assert.match(res.body.error, /OAuth session expired/);
+    assert.equal(promptCalls.length, 1, 'must not fall through to a second LLM call');
+  });
+});

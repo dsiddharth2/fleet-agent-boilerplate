@@ -25,6 +25,9 @@ export async function routeQuestion({ fleetApi, registry, message, memberName = 
     // The raw client defaults resume to true; routing prompts are self-contained.
     resume: false,
   });
+  if (result?.structuredContent?.isError) {
+    throw new Error(toolText(result) || 'routing call failed');
+  }
   const answer = toolText(result).trim().toLowerCase();
   return registry.find((entry) => entry.name.toLowerCase() === answer) ?? null;
 }
