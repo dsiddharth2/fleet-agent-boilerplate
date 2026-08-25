@@ -72,3 +72,58 @@ test('boilerplate registry entry runs the workflow and returns a summary string'
   assert.match(reply, /boilerplate workflow completed/);
   assert.match(reply, /pong/);
 });
+
+// --- router tests ---
+
+const { buildRoutePrompt, routeQuestion, DOER } = await import('../chat/router.mjs');
+
+function createRoutingMockFleetApi(replyText) {
+  const promptCalls = [];
+  return {
+    promptCalls,
+    async executePrompt(options) {
+      promptCalls.push(options);
+      return { content: [{ type: 'text', text: replyText }], structuredContent: { response: replyText } };
+    },
+  };
+}
+
+const sampleRegistry = [
+  { name: 'boilerplate', description: 'runs the demo workflow', run: async () => 'done' },
+];
+
+test('buildRoutePrompt lists workflows, the question, and the NONE escape', () => {
+  const prompt = buildRoutePrompt(sampleRegistry, 'please run the demo');
+  assert.match(prompt, /boilerplate: runs the demo workflow/);
+  assert.match(prompt, /please run the demo/);
+  assert.match(prompt, /NONE/);
+});
+
+test('routeQuestion returns the entry DOER names, dispatched with resume false', async () => {
+  const fleetApi = createRoutingMockFleetApi('boilerplate');
+  const entry = await routeQuestion({ fleetApi, registry: sampleRegistry, message: 'run the demo' });
+  assert.equal(entry, sampleRegistry[0]);
+  assert.equal(fleetApi.promptCalls.length, 1);
+  assert.equal(fleetApi.promptCalls[0].member_name, DOER);
+  assert.equal(fleetApi.promptCalls[0].resume, false);
+});
+
+test('routeQuestion tolerates case and surrounding whitespace in the reply', async () => {
+  const fleetApi = createRoutingMockFleetApi('  Boilerplate\n');
+  const entry = await routeQuestion({ fleetApi, registry: sampleRegistry, message: 'demo please' });
+  assert.equal(entry, sampleRegistry[0]);
+});
+
+test('routeQuestion returns null on NONE, garbage, or an empty registry', async () => {
+  assert.equal(
+    await routeQuestion({ fleetApi: createRoutingMockFleetApi('NONE'), registry: sampleRegistry, message: 'hi' }),
+    null,
+  );
+  assert.equal(
+    await routeQuestion({ fleetApi: createRoutingMockFleetApi('no idea, maybe ask someone'), registry: sampleRegistry, message: 'hi' }),
+    null,
+  );
+  const emptyRegistryApi = createRoutingMockFleetApi('boilerplate');
+  assert.equal(await routeQuestion({ fleetApi: emptyRegistryApi, registry: [], message: 'hi' }), null);
+  assert.equal(emptyRegistryApi.promptCalls.length, 0, 'empty registry must not spend an LLM call');
+});
