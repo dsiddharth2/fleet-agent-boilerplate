@@ -36,6 +36,11 @@ workflows/boilerplate/
   ensure-apralabs.mjs   # symlink node_modules/@apralabs → ~/.apra-fleet/…
   package.json          # { "type": "module" }
   workflow.json         # metadata only; not used as a Fleet CLI workflow
+chat/
+  main.mjs              # startChatServer() — connectFleet, listen, graceful close
+  app.mjs, router.mjs, registry.mjs, auth.mjs, fleet-text.mjs
+docs/
+  chat-interface.md     # full /chat reference
 tests/
   boilerplate.test.mjs  # mock fleetApi — no live server, no tokens
   setup-fleet-modules.mjs
@@ -148,6 +153,34 @@ The process should print `agent result: pong` and **return to the shell** (exit 
 | `agent()` | `pong` from `BOILERPLATE-DOER` (uses tokens) |
 
 `command()` uses `failSoft: true`: missing `python3` still continues. A thrown `transform()` or `agent()` fails the run (exit 1).
+
+---
+
+## Chat interface
+
+`POST /chat` sits ABOVE the workflows: an LLM routing call to **BOILERPLATE-DOER**
+matches each question against the workflow registry (`chat/registry.mjs`); a match runs
+that workflow, otherwise DOER answers directly. The response's `workflow` field says
+which. Multi-turn: pass back the returned `sessionId`. History is in-memory (lost on
+restart), capped at 20 messages per session. Auth is a stub (`chat/auth.mjs`) — inject
+real middleware via `createChatApp({ authenticate })`. New workflows become routable by
+appending `{ name, description, run }` to the registry.
+
+```bash
+npm install                      # once: installs express
+npm run chat                     # needs Fleet running + members provisioned (see above)
+
+curl -s -X POST http://127.0.0.1:3000/chat \
+  -H "content-type: application/json" \
+  -d '{"message":"hello"}'
+# → {"sessionId":"…","reply":"…","workflow":"direct"}   — send sessionId back for follow-ups
+```
+
+Mock tests (no server, no tokens): `node --test tests/chat.test.mjs`.
+
+**Full reference: [docs/chat-interface.md](docs/chat-interface.md)** — API details,
+routing behavior, adding workflows to the registry, replacing the auth stub,
+troubleshooting.
 
 ---
 
