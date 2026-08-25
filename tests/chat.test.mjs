@@ -291,3 +291,94 @@ test('a routed exchange is remembered in the session history', async () => {
     assert.match(directPrompt, /assistant: demo workflow ran/);
   });
 });
+
+test('POST /chat without a message returns 400 and never calls the fleet', async () => {
+  const fleetApi = createScriptedMockFleetApi(['x']);
+  const app = createChatApp({ fleetApi, registry: [] });
+  await withServer(app, async (base) => {
+    for (const body of [{}, { message: '' }, { message: '   ' }, { message: 42 }]) {
+      const res = await postChat(base, body);
+      assert.equal(res.status, 400, `expected 400 for ${JSON.stringify(body)}`);
+      assert.match(res.body.error, /message/);
+    }
+    assert.equal(fleetApi.promptCalls.length, 0);
+  });
+});
+
+test('502 when executePrompt rejects, and the failed turn is forgotten', async () => {
+  let shouldFail = true;
+  const promptCalls = [];
+  const fleetApi = {
+    promptCalls,
+    async executePrompt(options) {
+      promptCalls.push(options);
+      if (shouldFail) throw new Error('member offline');
+      return { content: [{ type: 'text', text: 'recovered' }], structuredContent: { response: 'recovered' } };
+    },
+  };
+  const app = createChatApp({ fleetApi, registry: [] });
+  await withServer(app, async (base) => {
+    const failed = await postChat(base, { message: 'doomed message', sessionId: 'fixed-session' });
+    assert.equal(failed.status, 502);
+    assert.match(failed.body.error, /member offline/);
+
+    shouldFail = false;
+    await postChat(base, { message: 'next message', sessionId: 'fixed-session' });
+    // The failed turn must not appear in the next prompt's transcript.
+    assert.doesNotMatch(promptCalls[1].prompt, /doomed message/);
+  });
+});
+
+test('502 when the direct answer is an error payload', async () => {
+  const fleetApi = {
+    async executePrompt() {
+      return {
+        content: [{ type: 'text', text: 'OAuth session expired' }],
+        structuredContent: { isError: true, reason: 'auth' },
+      };
+    },
+  };
+  const app = createChatApp({ fleetApi, registry: [] });
+  await withServer(app, async (base) => {
+    const res = await postChat(base, { message: 'hi' });
+    assert.equal(res.status, 502);
+    assert.match(res.body.error, /OAuth session expired/);
+  });
+});
+
+test('502 when a routed workflow adapter throws, and the turn is forgotten', async () => {
+  // Call 1: classification → 'demo' (adapter throws); call 2: NONE; call 3: direct answer.
+  const fleetApi = createScriptedMockFleetApi(['demo', 'NONE', 'later answer']);
+  const registry = [
+    {
+      name: 'demo',
+      description: 'demo workflow',
+      run: async () => {
+        throw new Error('workflow exploded');
+      },
+    },
+  ];
+  const app = createChatApp({ fleetApi, registry });
+  await withServer(app, async (base) => {
+    const failed = await postChat(base, { message: 'run the demo', sessionId: 'wf-session' });
+    assert.equal(failed.status, 502);
+    assert.match(failed.body.error, /workflow exploded/);
+
+    await postChat(base, { message: 'hello again', sessionId: 'wf-session' });
+    const directPrompt = fleetApi.promptCalls[2].prompt;
+    assert.doesNotMatch(directPrompt, /run the demo/);
+  });
+});
+
+test('an injected authenticate middleware can reject requests', async () => {
+  const fleetApi = createScriptedMockFleetApi(['x']);
+  const rejectAll = (req, res, next) => {
+    res.status(401).json({ error: 'unauthorized' });
+  };
+  const app = createChatApp({ fleetApi, registry: [], authenticate: rejectAll });
+  await withServer(app, async (base) => {
+    const res = await postChat(base, { message: 'hi' });
+    assert.equal(res.status, 401);
+    assert.equal(fleetApi.promptCalls.length, 0);
+  });
+});
