@@ -1,0 +1,5 @@
+{
+  "name": "boilerplate",
+  "entry": "main.mjs",
+  "description": "Copy-paste Fleet user workflow: connect, register members, command, transform, agent"
+}

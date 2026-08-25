@@ -1,0 +1,10 @@
+.git
+.fleet
+.fleet-src
+.fleet-workflow
+node_modules
+docs
+.env
+.token
+.claude
+.cursor
