@@ -127,3 +127,98 @@ test('routeQuestion returns null on NONE, garbage, or an empty registry', async 
   assert.equal(await routeQuestion({ fleetApi: emptyRegistryApi, registry: [], message: 'hi' }), null);
   assert.equal(emptyRegistryApi.promptCalls.length, 0, 'empty registry must not spend an LLM call');
 });
+
+// --- chat app tests ---
+
+const { createChatApp } = await import('../chat/app.mjs');
+
+function createScriptedMockFleetApi(replies) {
+  const promptCalls = [];
+  let index = 0;
+  return {
+    promptCalls,
+    async executePrompt(options) {
+      promptCalls.push(options);
+      const text = replies[Math.min(index++, replies.length - 1)];
+      return { content: [{ type: 'text', text }], structuredContent: { response: text } };
+    },
+  };
+}
+
+async function withServer(app, fn) {
+  const server = app.listen(0);
+  await new Promise((resolve) => server.once('listening', resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    return await fn(base);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
+
+async function postChat(base, body) {
+  const res = await fetch(`${base}/chat`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  return { status: res.status, body: await res.json() };
+}
+
+test('GET /health responds ok', async () => {
+  const app = createChatApp({ fleetApi: createScriptedMockFleetApi(['x']) });
+  await withServer(app, async (base) => {
+    const res = await fetch(`${base}/health`);
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), { ok: true });
+  });
+});
+
+test('direct path: DOER answers, response carries workflow "direct" and a generated sessionId', async () => {
+  const fleetApi = createScriptedMockFleetApi(['hello there']);
+  const app = createChatApp({ fleetApi, registry: [] });
+  await withServer(app, async (base) => {
+    const { status, body } = await postChat(base, { message: 'hi doer' });
+    assert.equal(status, 200);
+    assert.equal(body.reply, 'hello there');
+    assert.equal(body.workflow, 'direct');
+    assert.match(body.sessionId, /^[0-9a-f-]{36}$/);
+
+    assert.equal(fleetApi.promptCalls.length, 1);
+    const call = fleetApi.promptCalls[0];
+    assert.equal(call.member_name, 'BOILERPLATE-DOER');
+    assert.equal(call.resume, false);
+    assert.match(call.prompt, /hi doer/);
+  });
+});
+
+test('routed path: classification hits a registry entry, its run() answers', async () => {
+  // First executePrompt call = router classification.
+  const fleetApi = createScriptedMockFleetApi(['demo']);
+  const runCalls = [];
+  const registry = [
+    {
+      name: 'demo',
+      description: 'demo workflow',
+      run: async ({ message, history }) => {
+        runCalls.push({ message, history });
+        return 'demo workflow ran';
+      },
+    },
+  ];
+  const app = createChatApp({ fleetApi, registry });
+  await withServer(app, async (base) => {
+    const { status, body } = await postChat(base, { message: 'please run the demo' });
+    assert.equal(status, 200);
+    assert.equal(body.workflow, 'demo');
+    assert.equal(body.reply, 'demo workflow ran');
+    assert.equal(runCalls.length, 1);
+    assert.equal(runCalls[0].message, 'please run the demo');
+    // Only the classification call reached the fleet; the answer came from run().
+    assert.equal(fleetApi.promptCalls.length, 1);
+  });
+});
+
+test('createChatApp throws without fleetApi', () => {
+  assert.throws(() => createChatApp({}), /fleetApi/);
+});
