@@ -30,6 +30,7 @@ export function ensureApralabs() {
 
   if (!destIsCorrect) {
     fs.rmSync(dest, { recursive: true, force: true });
-    fs.symlinkSync(src, dest);
+    // 'junction' needs no admin rights on Windows; the type arg is ignored on POSIX.
+    fs.symlinkSync(src, dest, 'junction');
   }
 }
