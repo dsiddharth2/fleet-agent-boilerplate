@@ -222,3 +222,72 @@ test('routed path: classification hits a registry entry, its run() answers', asy
 test('createChatApp throws without fleetApi', () => {
   assert.throws(() => createChatApp({}), /fleetApi/);
 });
+
+test('same sessionId includes prior exchange in the direct prompt', async () => {
+  const fleetApi = createScriptedMockFleetApi(['first answer', 'second answer']);
+  const app = createChatApp({ fleetApi, registry: [] });
+  await withServer(app, async (base) => {
+    const first = await postChat(base, { message: 'my name is Sid' });
+    const second = await postChat(base, {
+      message: 'what is my name?',
+      sessionId: first.body.sessionId,
+    });
+
+    assert.equal(second.status, 200);
+    assert.equal(second.body.sessionId, first.body.sessionId);
+    assert.equal(second.body.reply, 'second answer');
+
+    const secondPrompt = fleetApi.promptCalls[1].prompt;
+    assert.match(secondPrompt, /user: my name is Sid/);
+    assert.match(secondPrompt, /assistant: first answer/);
+    assert.match(secondPrompt, /user: what is my name\?/);
+  });
+});
+
+test('sessions are isolated from each other', async () => {
+  const fleetApi = createScriptedMockFleetApi(['a', 'b']);
+  const app = createChatApp({ fleetApi, registry: [] });
+  await withServer(app, async (base) => {
+    await postChat(base, { message: 'secret-alpha' });
+    await postChat(base, { message: 'hello from session two' });
+    const secondPrompt = fleetApi.promptCalls[1].prompt;
+    assert.doesNotMatch(secondPrompt, /secret-alpha/);
+  });
+});
+
+test('history is capped at maxHistory messages', async () => {
+  const fleetApi = createScriptedMockFleetApi(['r1', 'r2', 'r3']);
+  // maxHistory 2 keeps only the latest user+assistant pair between requests.
+  const app = createChatApp({ fleetApi, registry: [], maxHistory: 2 });
+  await withServer(app, async (base) => {
+    const first = await postChat(base, { message: 'oldest message' });
+    const sid = first.body.sessionId;
+    await postChat(base, { message: 'middle message', sessionId: sid });
+    await postChat(base, { message: 'newest message', sessionId: sid });
+
+    const thirdPrompt = fleetApi.promptCalls[2].prompt;
+    assert.doesNotMatch(thirdPrompt, /oldest message/);
+    assert.match(thirdPrompt, /user: middle message/);
+    assert.match(thirdPrompt, /assistant: r2/);
+    assert.match(thirdPrompt, /user: newest message/);
+  });
+});
+
+test('a routed exchange is remembered in the session history', async () => {
+  // Call 1: classification → 'demo'; call 2: classification → NONE; call 3: direct answer.
+  const fleetApi = createScriptedMockFleetApi(['demo', 'NONE', 'follow-up answer']);
+  const registry = [
+    { name: 'demo', description: 'demo workflow', run: async () => 'demo workflow ran' },
+  ];
+  const app = createChatApp({ fleetApi, registry });
+  await withServer(app, async (base) => {
+    const first = await postChat(base, { message: 'run the demo' });
+    assert.equal(first.body.workflow, 'demo');
+
+    const second = await postChat(base, { message: 'what just happened?', sessionId: first.body.sessionId });
+    assert.equal(second.body.workflow, 'direct');
+    const directPrompt = fleetApi.promptCalls[2].prompt;
+    assert.match(directPrompt, /user: run the demo/);
+    assert.match(directPrompt, /assistant: demo workflow ran/);
+  });
+});
