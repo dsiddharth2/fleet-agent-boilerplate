@@ -13,6 +13,39 @@ The dummy run proves the primitives you will reuse: register members, `command()
 
 This repo does **not** vendor Fleet. `@apralabs/apra-fleet-workflow` and `@apralabs/apra-fleet-client` resolve from `~/.apra-fleet/node_modules` (or the Docker image). There is no root `package.json` dependency on those packages.
 
+**New here?** Read [docs/architecture.md](docs/architecture.md) — it explains Fleet's concepts (server, MCP, members, credential store) and how this repo is layered. Then [docs/development.md](docs/development.md) for setup, testing, and adding a workflow.
+
+---
+
+## How it works
+
+Two layers over a Fleet server you run yourself.
+
+```text
+chat/        POST /chat — an LLM routing call picks a registered workflow,
+  │          or the doer answers directly. Optional front door.
+  ▼
+workflows/   runBoilerplate() — connects, then runs the workflow body
+  │
+  ▼ MCP over HTTP (127.0.0.1:7523)
+Fleet server — owns members, credentials, and spawns the LLM CLI
+  BOILERPLATE-DOER          workdir/BOILERPLATE-DOER/
+  BOILERPLATE-REVIEWER      workdir/BOILERPLATE-REVIEWER/
+```
+
+`chat/` imports from `workflows/`; nothing under `workflows/` imports from `chat/`. Delete the chat layer and the workflow layer still stands.
+
+Four ideas explain most of the code:
+
+- **Launcher / body split.** `main.mjs` owns connection, transport and cleanup; `boilerplate.js` only does the work. That is what keeps the body testable.
+- **`fleetApi` is injected.** Both launchers connect only when no client is passed in, so mock tests run with no server and no tokens.
+- **Fleet is a machine install, not a dependency.** `ensureApralabs()` symlinks `node_modules/@apralabs` to `~/.apra-fleet/node_modules/@apralabs` before any dynamic import.
+- **Transport is pinned to `http`.** Left unset, the client would spawn Fleet over stdio and never see the members you provisioned.
+
+The dummy run proves the primitives in order: register members → `fleetStatus()` → `command()` (Python, no tokens) → `transform()` (pure JS) → `agent()` (LLM, spends tokens). Registration is idempotent, so re-running is cheap.
+
+The one thing that surprises everyone: **the OAuth token must be in Fleet's credential store on the member**, because the Fleet server spawns Claude — not your Node process. Exporting `CLAUDE_CODE_OAUTH_TOKEN` in your shell does not reach `agent()`.
+
 ---
 
 ## Use this in another project
@@ -40,9 +73,13 @@ chat/
   main.mjs              # startChatServer() — connectFleet, listen, graceful close
   app.mjs, router.mjs, registry.mjs, auth.mjs, fleet-text.mjs
 docs/
+  architecture.md       # how it fits together + Fleet concepts primer
+  development.md        # setup, testing, adding a workflow, conventions
   chat-interface.md     # full /chat reference
 tests/
   boilerplate.test.mjs  # mock fleetApi — no live server, no tokens
+  chat.test.mjs         # mock fleetApi — auth, router, registry, routes
+  boilerplate.live.test.mjs  # real server, real member, real token
   setup-fleet-modules.mjs
 scripts/
   provision-members.sh  # register local members + OAuth on BOILERPLATE-DOER
@@ -248,6 +285,16 @@ Do not pass OAuth tokens into `agent()`. Do not clone `apra-fleet` into this rep
 | `Cannot find package 'undici'` | Stale `node_modules/@apralabs` symlink. `ensureApralabs()` should retarget `~/.apra-fleet/node_modules/@apralabs`. Delete a leftover repo-local `.fleet-src` if you created one. |
 | Extra member named `doer` in `fleet status` | Leftover from experiments. The dummy workflow does not use it. |
 | Live run prints `pong` but the shell does not return | Update `main.mjs` (transport `stop()` + `process.exit(0)`). Ctrl+C the hung client; the Fleet server can stay up. |
+
+---
+
+## Further reading
+
+| Document | Covers |
+|----------|--------|
+| [docs/architecture.md](docs/architecture.md) | Fleet concepts, the layer diagram, module map, data flow, and the reasoning behind each design decision |
+| [docs/development.md](docs/development.md) | First-time setup, provisioning, the mock vs. live test split, adding a workflow end to end, conventions |
+| [docs/chat-interface.md](docs/chat-interface.md) | `POST /chat` API reference, routing, sessions, registry, replacing the auth stub |
 
 ---
 
