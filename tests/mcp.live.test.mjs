@@ -11,9 +11,10 @@ test('inspect-members reports on live members over MCP', { timeout: 180000 }, as
   const { server, close } = await startMcpServer({ port: 0 });
   const url = new URL(`http://127.0.0.1:${server.address().port}/mcp`);
   const client = new Client({ name: 'live-test-client', version: '1.0.0' });
-  await client.connect(new StreamableHTTPClientTransport(url));
 
   try {
+    await client.connect(new StreamableHTTPClientTransport(url));
+
     const { tools } = await client.listTools();
     assert.deepEqual(tools.map((tool) => tool.name).sort(), ['boilerplate', 'inspect-members']);
 
@@ -30,7 +31,10 @@ test('inspect-members reports on live members over MCP', { timeout: 180000 }, as
       assert.equal(member.report.exists, true, `${member.name} work folder should exist`);
     }
   } finally {
-    await client.close();
-    await close();
+    try {
+      await client.close();
+    } finally {
+      await close();
+    }
   }
 });
