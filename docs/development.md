@@ -19,7 +19,7 @@ cd ~/.apra-fleet/bin && apra-fleet start    # leave this running
 Then, in the repo:
 
 ```bash
-npm install                                  # installs express (the only dependency)
+npm install                                  # installs the MCP and HTTP dependencies
 ```
 
 `npm install` does **not** install Fleet's packages. `@apralabs/apra-fleet-workflow` and
@@ -56,37 +56,41 @@ by your process. Re-run the `auth` command when you see `OAuth session expired`.
 |---|---|---|
 | `npm test` | no | no |
 | `node --test tests/boilerplate.test.mjs` | no | no |
-| `node --test tests/chat.test.mjs` | no | no |
+| `node --test tests/inspect-members.test.mjs` | no | no |
+| `node --test tests/mcp.test.mjs` | no | no |
+| `node --test tests/mcp.live.test.mjs` | yes | no |
 | `node --test tests/boilerplate.live.test.mjs` | yes | yes |
 | `node workflows/boilerplate/main.mjs` | yes | yes |
-| `npm run chat` | yes | yes |
+| `npm run mcp` | yes | only for `boilerplate` |
 | `python3 workflows/boilerplate/dummy.py` | no | no |
+| `python3 workflows/inspect-members/inspect.py --root workdir/BOILERPLATE-DOER` | no | no |
 
 A successful live workflow run prints `agent result: pong` and **returns to the shell**
 with exit 0. If it prints `pong` and hangs, the transport was not stopped — check the
 `finally` block in the launcher.
 
-The chat server listens on `PORT`, default 3000:
+The MCP server listens on loopback at `PORT`, default 3000. Start it, then register it
+with Claude Code from another terminal:
 
 ```bash
-npm run chat
-
-curl -s -X POST http://127.0.0.1:3000/chat \
-  -H "content-type: application/json" \
-  -d '{"message":"hello"}'
-# → {"sessionId":"…","reply":"…","workflow":"direct"}
+npm run mcp
+claude mcp add --transport http fleet http://127.0.0.1:3000/mcp
 ```
 
-Pass the returned `sessionId` back on the next request to continue a conversation.
+See [mcp-interface.md](mcp-interface.md) for timeout, hosting, and authentication
+configuration.
 
 ## Testing
 
 Tests split by what they need, and the split is the point.
 
-**Mock tests** (`tests/boilerplate.test.mjs`, `tests/chat.test.mjs`) run anywhere — no
-Fleet server, no members, no tokens, no network. They work because both launchers accept
-an injected `fleetApi`. These are what `npm test` runs, and what you should be running
-constantly.
+**Mock tests** (`tests/boilerplate.test.mjs`, `tests/inspect-members.test.mjs`) run
+anywhere — no Fleet server, no members, no tokens, no network. They work because the
+launchers accept an injected `fleetApi`.
+
+`tests/mcp.test.mjs` also needs no Fleet server or token. It drives a real MCP client
+over a real ephemeral port against the HTTP application, with Fleet mocked underneath.
+These three files are what `npm test` runs, and what you should run constantly.
 
 The mock is a hand-written object implementing the four MCP methods the code actually
 uses (`registerMember`, `fleetStatus`, `executeCommand`, `executePrompt`) and recording
@@ -95,10 +99,11 @@ so the text-extraction paths get exercised rather than bypassed. Because
 `fleetStatus()` is derived from what was registered, the mock can assert genuinely
 useful behavior, such as a second `runBoilerplate()` not re-registering members.
 
-**Live tests** (`tests/boilerplate.live.test.mjs`) run the real thing against a real
-member with a real token, asserting `hello-from-python`, the transform payload, and
-`pong`. They have a 180-second timeout. Run them before merging anything that touches
-the Fleet integration, not on every save.
+**Live tests** split further. `tests/mcp.live.test.mjs` exercises the MCP server against
+a live Fleet without spending tokens. `tests/boilerplate.live.test.mjs` runs the full
+workflow against a real member with a real token, asserting `hello-from-python`, the
+transform payload, and `pong`. Run live tests before merging changes that touch the
+Fleet integration, not on every save.
 
 `tests/setup-fleet-modules.mjs` calls `ensureApralabs()` before any test imports Fleet
 packages; import it first in any new test file that pulls in a launcher.
@@ -129,26 +134,25 @@ export async function runMyWorkflow({ fleetApi } = {}) {
 **2. Write a mock test first.** Reuse the mock-client pattern. Assert the calls you care
 about — which members, which commands, which prompts.
 
-**3. Make it routable, if it should be.** Append an entry to `defaultRegistry` in
-`chat/registry.mjs`:
+**3. Expose it as an MCP tool, if it should be.** Append an entry to `defaultRegistry`
+in `mcp/registry.mjs`:
 
 ```js
 {
   name: 'my-workflow',
-  description: 'One or two sentences the ROUTER reads to decide when to pick this. ' +
-    'Describe the user intents it serves, not implementation details.',
-  async run({ fleetApi, message, history }) {
-    const result = await runMyWorkflow({ fleetApi });
-    return `my-workflow completed: ${JSON.stringify(result)}`;
+  description: 'What this does and when a model should choose it.',
+  inputSchema: z.object({ target: z.string().describe('What to act on') }),
+  annotations: { readOnlyHint: true },
+  async run({ fleetApi, args, signal, reportPhase }) {
+    return await runMyWorkflow({ fleetApi, signal, reportPhase, target: args.target });
   },
 }
 ```
 
-No router or route changes are needed — the registry is data. `name` must be unique,
-since it is literally what the router's LLM replies with. `description` is written for a
-classifier, not for a human reading a changelog; if a workflow is never selected, the
-description is almost always the reason. A throwing `run` returns 502 and the turn is
-dropped from history.
+No changes to `server.mjs` or `http.mjs` are needed — the registry is data. `name` must
+be unique, `inputSchema` must be a `z.object(...)`, and omitting `inputSchema` declares
+a no-argument tool. Write `description` for the connected model deciding whether to
+choose the tool. A thrown `run` automatically becomes an MCP `isError` result.
 
 **4. Register new members if you need them.** Each gets its own folder under `workdir/`,
 and its own `register-member` call in `scripts/provision-members.sh`. Use unique names —
@@ -157,7 +161,7 @@ prefix.
 
 ## Conventions
 
-- **ESM everywhere.** `"type": "module"`, `.mjs` for launchers and chat modules.
+- **ESM everywhere.** `"type": "module"`, `.mjs` for launchers and MCP modules.
 - **`node:test` and `node:assert/strict`.** No test framework dependency.
 - **No `@apralabs/*` in `package.json`.** Fleet resolves through the symlink.
 - **Dependency injection over module-level singletons.** Anything that talks to Fleet
@@ -203,5 +207,5 @@ calls inside the container still need an LLM CLI present.
 | `Member "…" not found` on `auth` | Register the member before authenticating it. |
 | `OAuth session expired` | `claude setup-token`, then re-run `apra-fleet auth --oauth --member BOILERPLATE-DOER …`. |
 | Live run prints `pong` but never exits | Transport not stopped — check the launcher's `finally`. |
-| Every chat reply is `workflow: "direct"` | The registry `description` isn't distinguishing the workflow. Test the classification with `buildRoutePrompt`. |
-| Chat forgets context | Send the previous `sessionId` back; history is in-memory and lost on restart. |
+| A tool is never chosen | Improve its registry `description` so the connected model knows when to use it. |
+| A tool call times out | Set `"timeout"` in that server's `.mcp.json` entry. |

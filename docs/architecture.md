@@ -33,13 +33,13 @@ owns the member registry and the credential store, and it is what actually spawn
 CLIs. This repo never starts it for you outside Docker — it expects it to already be
 running and fails loudly with instructions when it isn't.
 
-**MCP.** The Model Context Protocol is the wire format the Fleet server speaks. Fleet
-exposes its capabilities as MCP *tools* — `registerMember`, `fleetStatus`,
-`executeCommand`, `executePrompt`. This repo is purely an MCP **client**; there is no
-MCP server code here. Every Fleet operation in this codebase is ultimately one MCP tool
-call, and every result comes back in MCP's envelope shape (`content[]` /
-`structuredContent`), which is why text extraction is a shared helper rather than
-inline property access.
+**MCP.** The Model Context Protocol is used on both sides of this process. On top, this
+repo is an MCP **server**: it exposes each entry in `mcp/registry.mjs` as a tool for
+Claude Code. Underneath, it is an MCP **client** to Fleet, whose tools include
+`registerMember`, `fleetStatus`, `executeCommand`, and `executePrompt`. Every Fleet
+operation ultimately becomes one MCP tool call, and each result returns in MCP's
+envelope shape (`content[]` / `structuredContent`), which is why text extraction is a
+shared helper rather than inline property access.
 
 **Member.** A named agent workspace registered with the server: a name, a type
 (`local` or `remote`), an LLM (`claude`), and a working folder on disk. Fleet runs
@@ -65,12 +65,12 @@ unattended" problem traces back to this.
 ┌─────────────────────────────────────────────────────────────┐
 │  Your Node process                                          │
 │                                                             │
-│   chat/            POST /chat — LLM-routed HTTP front door   │
-│     │              (optional; sits above workflows)          │
-│     │ registry.run({ fleetApi, message, history })           │
+│   mcp/             POST /mcp — MCP server front door         │
+│     │              one tool per registry entry               │
+│     │ entry.run({ fleetApi, args, signal, reportPhase })     │
 │     ▼                                                       │
 │   workflows/       runBoilerplate() — connect + execute      │
-│     │              boilerplate.js — the workflow body        │
+│     │              inspect-members — read-only inspection    │
 └─────┼───────────────────────────────────────────────────────┘
       │ connectFleet() — MCP over HTTP
       ▼
@@ -83,9 +83,9 @@ unattended" problem traces back to this.
 └─────────────────────────────────────────────────────────────┘
 ```
 
-The dependency arrow points one way only: `chat/` imports from `workflows/`, and nothing
-under `workflows/` imports from `chat/`. The workflow layer stands alone, and the chat
-layer is an optional front door you can delete without touching it.
+The dependency arrow points one way only: `mcp/` imports from `workflows/`, and nothing
+under `workflows/` imports from `mcp/`. The workflow layer stands alone; MCP is a
+stateless front door over it.
 
 ## Module map
 
@@ -122,18 +122,18 @@ check absorbs the race where something else registered the member in between.
 `command()` passes `failSoft: true`, so a machine without `python3` still completes the
 run. A throwing `transform()` or `agent()` does fail the run, and the process exits 1.
 
-### `chat/`
+### `mcp/`
 
 | File | Responsibility |
 |---|---|
-| `main.mjs` | Server launcher. Same connect pattern as the workflow launcher, then listens and wires SIGINT/SIGTERM shutdown. |
-| `app.mjs` | Express factory `createChatApp({ fleetApi, registry, authenticate, … })`. Owns routes and session state. |
-| `router.mjs` | Builds the classification prompt and asks the doer which workflow fits. |
-| `registry.mjs` | The list of routable workflows: `{ name, description, run }`. |
+| `main.mjs` | Server launcher. Connects to Fleet, listens on loopback, and wires SIGINT/SIGTERM shutdown. |
+| `server.mjs` | Builds the MCP server and registers one tool for each registry entry. Converts returned values to tool results and emits progress when requested. |
+| `http.mjs` | Creates the Express app. Provides `GET /health` and a stateless `POST /mcp` with a fresh MCP server and transport per request. |
+| `registry.mjs` | The tool catalog and workflow adapters: `{ name, description, inputSchema?, annotations?, run }`. |
 | `auth.mjs` | Pass-through auth stub. Replace by injection, not by editing. |
-| `fleet-text.mjs` | Pulls plain text out of an MCP tool result. |
+| `fleet-text.mjs` | Pulls plain text out of Fleet MCP tool results. |
 
-Full API reference lives in [chat-interface.md](chat-interface.md).
+Full interface reference lives in [mcp-interface.md](mcp-interface.md).
 
 ## Data flow
 
@@ -153,22 +153,24 @@ runBoilerplate()
 The `finally` matters. Without stopping the transport the HTTP client keeps the event
 loop alive and the process prints its result but never returns to the shell.
 
-### A chat request
+### An MCP tool call
 
 ```text
-POST /chat { message, sessionId? }
-  ├─ authenticate                    → req.user
-  ├─ validate message                → 400 if missing/blank, before any Fleet call
-  ├─ routeQuestion()                 → LLM picks a registry name, or NONE
-  ├─ matched?  entry.run({ fleetApi, message, history })
-  │  else      executePrompt(transcript) on the doer
-  ├─ on throw                        → 502, turn NOT recorded
-  └─ record turn, cap history        → 200 { sessionId, reply, workflow }
+Claude Code chooses a tool from tools/list
+  └─ POST /mcp tools/call
+       ├─ authenticate
+       ├─ create a fresh MCP server + HTTP transport
+       ├─ validate args with the entry's inputSchema, when present
+       ├─ entry.run({ fleetApi, args, signal, reportPhase })
+       │    ├─ phase()/log() output             → server terminal
+       │    └─ reportPhase(), if progressToken  → heartbeat to Claude
+       ├─ return one final MCP tool result      → Claude
+       └─ close the per-request MCP server
 ```
 
-Routing costs an extra LLM call on every message — one to classify, then either a
-workflow run or a second call to answer directly. That is the price of the registry
-being data rather than code.
+Each tool call has one request and one final response. Progress notifications are
+heartbeats only: workflow terminal output is not streamed into the model's context.
+The MCP layer keeps no session state between calls.
 
 ## Design decisions worth knowing
 
@@ -191,25 +193,29 @@ connect when one isn't supplied. This is what makes the mock tests possible — 
 with no server, no members, and no token, and still assert real behavior like "a re-run
 does not re-register members".
 
-**Prompts pass `resume: false`.** The underlying client defaults `resume` to `true`,
-which would thread these calls into a member's ongoing session. Both the routing prompt
-and the direct-answer prompt are self-contained and carry their own transcript, so
-resuming would leak unrelated context between them.
+**There is no internal router.** The model connected over MCP already sees the tool
+names, descriptions, and schemas and decides which one to call. Adding another LLM
+classification call inside this process would duplicate that routing, add latency, and
+spend tokens unnecessarily. Tool descriptions are therefore part of the interface.
 
-**Auth is replaced by injection.** `createChatApp({ authenticate })` takes middleware.
-Routes depend only on `req.user`, so real auth drops in without editing `auth.mjs`.
+**Slow workflows use heartbeat plus client configuration.** The SDK does not implement
+MCP Tasks, so long-running calls remain one request/response. When the client supplies a
+progress token, phase reports provide a heartbeat; a sufficiently large `timeout` in
+the client's `.mcp.json` is the reliable control for slow calls.
+
+**Auth is replaced by injection.** `createMcpHttpApp({ authenticate })` takes
+middleware. Routes depend only on `req.user`, so real auth drops in without editing
+`auth.mjs`.
 
 ## Where state lives
 
 | State | Location | Lifetime |
 |---|---|---|
-| Chat sessions | In-memory `Map` in the app factory | Lost on restart; not shared across processes. Capped at 20 messages per session. |
 | Member registry | Fleet server | Survives restarts of your process. |
 | OAuth tokens | Fleet credential store, per member | Until the token expires. |
 | Member scratch space | `workdir/<MEMBER>/` | On disk; `.claude/` inside is gitignored local state. |
 
-The in-memory sessions are the main scaling constraint: run one instance, or add
-persistence before running more.
+The MCP layer holds no state: every HTTP request gets a fresh MCP server and transport.
 
 ## Extension points
 
@@ -219,8 +225,8 @@ persistence before running more.
 | Real LLM work | Change the `agent()` prompt, keep `member_name` |
 | A second agent | Dispatch `agent({ member_name: 'BOILERPLATE-REVIEWER' })`; register and auth it the same way |
 | Your own member names | Rename the constants in `boilerplate.js`, the `workdir/` folders, and `scripts/provision-members.sh` |
-| A new routable workflow | Append `{ name, description, run }` to `chat/registry.mjs` — no router or route changes |
-| Real authentication | Pass middleware to `createChatApp({ authenticate })` |
+| A new MCP tool | Append its entry to `mcp/registry.mjs` — no server or HTTP changes |
+| Real authentication | Pass middleware to `createMcpHttpApp({ authenticate })` |
 
 Two things to avoid: do not pass OAuth tokens into `agent()` payloads (they belong in
 Fleet's credential store), and do not clone `apra-fleet` into this repo — the symlink
