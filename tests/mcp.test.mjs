@@ -1,12 +1,15 @@
 import './setup-fleet-modules.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import { request as httpRequest } from 'node:http';
+import express from 'express';
 import * as z from 'zod/v4';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 
 const { buildMcpServer } = await import('../mcp/server.mjs');
 const { createMcpHttpApp } = await import('../mcp/http.mjs');
+const { startMcpServer } = await import('../mcp/main.mjs');
 
 function createMockFleetApi() {
   const registerCalls = [];
@@ -76,6 +79,31 @@ async function within(promise, milliseconds, message) {
     clearTimeout(timer);
   }
 }
+
+test('startMcpServer closes a half-open HTTP server when listening fails', async (t) => {
+  const listenError = Object.assign(new Error('address already in use'), { code: 'EADDRINUSE' });
+  const server = new EventEmitter();
+  server.listening = true;
+  let closeCalls = 0;
+  server.close = (callback) => {
+    closeCalls += 1;
+    server.listening = false;
+    callback();
+  };
+
+  t.mock.method(express.application, 'listen', function listen(port, host) {
+    assert.equal(port, 30_001);
+    assert.equal(host, '127.0.0.1');
+    queueMicrotask(() => server.emit('error', listenError));
+    return server;
+  });
+
+  await assert.rejects(
+    startMcpServer({ fleetApi: createMockFleetApi(), port: 30_001 }),
+    (err) => err === listenError,
+  );
+  assert.equal(closeCalls, 1);
+});
 
 test('advertises exactly the registry tools, with schemas and annotations', async () => {
   await withServer(undefined, async ({ client }) => {

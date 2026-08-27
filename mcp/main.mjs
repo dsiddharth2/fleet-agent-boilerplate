@@ -34,10 +34,24 @@ export async function startMcpServer({ fleetApi, port } = {}) {
   // Bind loopback by default. Hosting this on a VM needs an explicit bind
   // address AND real authentication — see docs/mcp-interface.md.
   const server = app.listen(listenPort, '127.0.0.1');
-  await new Promise((resolve, reject) => {
-    server.once('listening', resolve);
-    server.once('error', reject);
-  });
+  try {
+    await new Promise((resolve, reject) => {
+      server.once('listening', resolve);
+      server.once('error', reject);
+    });
+  } catch (err) {
+    try {
+      await new Promise((resolve) => server.close(() => resolve()));
+    } catch {
+      // Preserve the listener error after best-effort HTTP cleanup.
+    }
+    try {
+      await transport?.stop?.();
+    } catch {
+      // Preserve the listener error after best-effort Fleet cleanup.
+    }
+    throw err;
+  }
   console.log(`MCP server listening on http://127.0.0.1:${server.address().port}/mcp`);
 
   const close = async () => {
