@@ -55,6 +55,17 @@ test('honors an explicit members list', async () => {
   assert.equal(fleetApi.commandCalls.length, 1);
 });
 
+test('rejects member names outside this repo before command dispatch', async () => {
+  const unsupported = 'OTHER"; touch /tmp/inspect-members-injection; #';
+  const fleetApi = createMockFleetApi({ present: [unsupported] });
+
+  await assert.rejects(
+    () => runInspectMembers({ fleetApi, members: [unsupported] }),
+    /unsupported member/i,
+  );
+  assert.equal(fleetApi.commandCalls.length, 0);
+});
+
 test('reports an unregistered member as absent without running a command', async () => {
   const fleetApi = createMockFleetApi({ present: ['BOILERPLATE-DOER'] });
   const result = await runInspectMembers({ fleetApi });

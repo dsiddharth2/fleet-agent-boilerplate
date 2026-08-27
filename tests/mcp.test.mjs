@@ -56,11 +56,14 @@ async function withServer(registryOverride, run) {
   });
   const url = new URL(`http://127.0.0.1:${httpServer.address().port}/mcp`);
   const client = new Client({ name: 'test-client', version: '1.0.0' });
-  await client.connect(new StreamableHTTPClientTransport(url));
   try {
-    await run({ client, fleetApi });
+    await client.connect(new StreamableHTTPClientTransport(url));
+    try {
+      await run({ client, fleetApi });
+    } finally {
+      await client.close();
+    }
   } finally {
-    await client.close();
     await new Promise((resolve) => httpServer.close(resolve));
   }
 }
@@ -115,6 +118,10 @@ test('advertises exactly the registry tools, with schemas and annotations', asyn
 
     const inspect = tools.find((tool) => tool.name === 'inspect-members');
     assert.deepEqual(Object.keys(inspect.inputSchema.properties).sort(), ['includeFiles', 'members']);
+    assert.deepEqual(inspect.inputSchema.properties.members.items.enum, [
+      'BOILERPLATE-DOER',
+      'BOILERPLATE-REVIEWER',
+    ]);
     assert.equal(inspect.annotations.readOnlyHint, true);
 
     const boilerplate = tools.find((tool) => tool.name === 'boilerplate');

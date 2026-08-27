@@ -102,6 +102,7 @@ export async function main(context) {
 
   phase('agent smoke');
   await reportPhase('dispatching the agent prompt');
+  if (cancelled()) return { cancelled: true, command: cmdResult, transform: payload };
   const reply = await agent('Reply with exactly: pong', { member_name: DOER });
   log(`agent result: ${reply}`);
 

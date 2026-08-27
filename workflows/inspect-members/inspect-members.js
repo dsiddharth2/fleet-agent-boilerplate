@@ -13,6 +13,10 @@ const DEFAULT_MEMBERS = [DOER, REVIEWER];
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '../..');
 const INSPECT_PY = fileURLToPath(new URL('./inspect.py', import.meta.url));
+const MEMBER_TARGETS = new Map([
+  [DOER, { name: DOER, workFolder: path.join(repoRoot, 'workdir', DOER) }],
+  [REVIEWER, { name: REVIEWER, workFolder: path.join(repoRoot, 'workdir', REVIEWER) }],
+]);
 
 function toolText(result) {
   if (result == null) return '';
@@ -74,15 +78,22 @@ export async function main(context) {
   const signal = args.signal;
   const reportPhase = args.reportPhase ?? (() => {});
   const includeFiles = args.includeFiles === true;
-  const targets =
+  const requestedMembers =
     Array.isArray(args.members) && args.members.length > 0 ? args.members : DEFAULT_MEMBERS;
+  const targets = requestedMembers.map((name) => {
+    const target = MEMBER_TARGETS.get(name);
+    if (!target) {
+      throw new Error(`Unsupported member: ${String(name)}`);
+    }
+    return target;
+  });
 
   phase('status');
   await reportPhase('reading fleet status');
   const statusText = toolText(await fleetApi.fleetStatus());
 
   const members = [];
-  for (const name of targets) {
+  for (const { name, workFolder } of targets) {
     if (signal?.aborted) {
       log(`cancelled before inspecting ${name}`);
       break;
@@ -98,7 +109,7 @@ export async function main(context) {
     await reportPhase(`inspecting ${name}`);
     const flags = includeFiles ? ' --files' : '';
     const raw = await command(
-      `python3 "${INSPECT_PY}" --root "${path.join(repoRoot, 'workdir', name)}"${flags}`,
+      `python3 "${INSPECT_PY}" --root "${workFolder}"${flags}`,
       { member_name: name, failSoft: true },
     );
     const text = commandText(raw);

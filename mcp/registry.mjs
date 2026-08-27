@@ -27,7 +27,7 @@ export const defaultRegistry = [
       'member has been doing. Read-only and spends no LLM tokens.',
     inputSchema: z.object({
       members: z
-        .array(z.string())
+        .array(z.enum(['BOILERPLATE-DOER', 'BOILERPLATE-REVIEWER']))
         .optional()
         .describe(
           'Member names to inspect. Defaults to BOILERPLATE-DOER and BOILERPLATE-REVIEWER.',
