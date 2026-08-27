@@ -27,10 +27,17 @@ server on top, client to Fleet underneath.
 | Second example workflow | `inspect-members` | Demonstrates typed parameters, fan-out across members, and structured output — the three things no existing code shows. Also gives `BOILERPLATE-REVIEWER` a job. |
 | HTTP session mode | Stateless | No per-request state is held, so a fresh server and transport per request is simpler, shares nothing between concurrent calls, and leaves room to scale out later. |
 | Chat sessions | Deleted | Claude owns the conversation. Removes the in-memory `Map`, the 20-message cap, and the repo's only scaling constraint. |
+| Cancellation | Honored, cooperatively between phases | A cancelled or disconnected call otherwise keeps spending real tokens on `agent()` while the SDK discards the result. |
+| Tool annotations | Declared per entry | `readOnlyHint` lets a host auto-approve `inspect-members` and prompt before the side-effecting `boilerplate`. |
+| Progress notifications | Deferred | Whether Claude Code sends a `progressToken` and renders the messages is the client's choice, not ours. Ship without it, then decide with evidence. |
 
 Explicitly out of scope: a member that authors new workflows on demand, MCP progress
 notifications, `outputSchema` / `structuredContent`, Fleet reconnection, and real
 authentication. Concurrency and scaling are deferred.
+
+MCP's logging channel is **not** an option for streaming workflow output: it is deprecated as
+of protocol version 2026-07-28 (SEP-2577). Progress notifications are the sanctioned path if
+we later want workflow phases visible inside the Claude session.
 
 ## Architecture
 
@@ -121,15 +128,21 @@ itself, add it explicitly.
 
 ```js
 {
-  name: 'inspect-members',            // becomes the MCP tool name; must be unique
-  description: '...',                 // Claude reads this to decide when to call it
-  inputSchema: { /* zod shape */ },   // omit entirely to mean "no arguments"
-  async run({ fleetApi, args }) { /* → string or object */ },
+  name: 'inspect-members',                 // becomes the MCP tool name; must be unique
+  description: '...',                      // Claude reads this to decide when to call it
+  inputSchema: z.object({ /* … */ }),      // omit entirely to mean "no arguments"
+  annotations: { readOnlyHint: true },     // behavior hints for the host
+  async run({ fleetApi, args, signal }) { /* → string or object */ },
 }
 ```
 
-- `args` is the tool input **after** the SDK has validated it against `inputSchema`. It is
-  `{}` for entries that declare no schema.
+- `inputSchema` is a full `z.object(...)` schema, not a bare shape. The SDK derives the JSON
+  Schema Claude sees, validates arguments, and types the handler from that one declaration.
+- `args` is the tool input **after** validation. It is `{}` for entries that declare no schema.
+- `signal` is the request's `AbortSignal`, forwarded from `ctx.mcpReq.signal`. Workflows check
+  it between phases (see Cancellation).
+- `annotations` are hints the host may act on — `readOnlyHint`, `destructiveHint`,
+  `idempotentHint`. They never change how the SDK runs the tool.
 - A returned string becomes the tool's text content. A returned object is JSON-serialized
   into text content.
 - A throwing `run` becomes an `isError` tool result (see Error handling).
@@ -139,9 +152,13 @@ itself, add it explicitly.
 
 ### `boilerplate` (existing, minimally changed)
 
-No `inputSchema`, so the tool takes no arguments. `run({ fleetApi })` calls
-`runBoilerplate({ fleetApi })` and returns its result. The workflow body, the five phases,
-and the launcher are untouched.
+No `inputSchema`, so the tool takes no arguments. `run({ fleetApi, signal })` calls
+`runBoilerplate({ fleetApi, signal })` and returns its result. Annotations declare
+`readOnlyHint: false` and `idempotentHint: true` — it registers members and spends tokens, but
+re-running it is safe because registration is idempotent.
+
+The only body change is a cancellation check between phases. The five phases and the
+launcher/body split are otherwise untouched.
 
 ### `inspect-members` (new)
 
@@ -169,6 +186,9 @@ Body flow:
    when `includeFiles` is true) via `command()` on that member, with `failSoft: true`.
 4. Aggregate per-member JSON into one report: `{ generatedAt, members: [{ name, present, report | error }] }`.
 
+Annotations declare `readOnlyHint: true` and `idempotentHint: true`, so a host may auto-approve
+it.
+
 Three deliberate properties:
 
 - **Read-only.** It never registers or mutates anything, so `boilerplate` remains the only
@@ -185,6 +205,44 @@ working directory, so it can be run standalone as a smoke test the way the READM
 suggests for `dummy.py`. It reports the work folder path, whether it exists, a file count,
 total bytes, and — when `--files` is passed — a listing of top-level entries.
 
+## How a call starts, reports, and finishes
+
+A tool call is a **single request/response pair**, so by default Claude gets no signal that
+work is underway — it simply awaits the result.
+
+```text
+Claude ──tools/call (one HTTP POST, held open)──▶ mcp/http.mjs
+                                                   buildServer() → handler
+                                                   registry.run({ fleetApi, args, signal })
+                                                   → runInspectMembers(...) → Fleet
+Claude ◀──── CallToolResult on that same POST ────  { content: [{ type: 'text', … }] }
+```
+
+The workflow's return value travels back the way it came: the body returns, `executeFile`
+resolves, `run` produces a string or object, `mcp/server.mjs` wraps it in a text content
+block, and the SDK writes it as the JSON-RPC result on the still-open POST. Claude reads that
+text as the tool result and continues its turn. There is no polling and no callback.
+
+One asymmetry to document for users: `phase()` and `log()` output goes to the terminal running
+`npm run mcp`, so the operator sees live progress while Claude sees nothing until the call
+returns.
+
+### Cancellation
+
+`ctx.mcpReq.signal` aborts when Claude cancels the call or the connection drops, and the SDK
+discards whatever a cancelled handler eventually returns. Without handling it, a cancelled
+`boilerplate` run keeps spending real tokens on `agent()` for a result nobody will read.
+
+The signal is forwarded from the tool handler into `run({ signal })`, then into the launcher
+as `runBoilerplate({ fleetApi, signal })` / `runInspectMembers({ fleetApi, signal, … })`, and
+reaches the body through the engine's `args`. Bodies check `signal?.aborted` **between
+phases** and return early with what they have.
+
+This is deliberately **cooperative and coarse-grained**. An in-flight Fleet MCP call cannot be
+aborted mid-flight, so cancelling does not kill the current step — it prevents the *next* one
+from starting. For `boilerplate` that is still the thing that matters, because it stops the
+`agent()` phase from ever beginning.
+
 ## Error handling
 
 MCP separates protocol failures from tool failures, and this design uses that split.
@@ -196,7 +254,8 @@ MCP separates protocol failures from tool failures, and this design uses that sp
 | Invalid tool arguments | Rejected by the SDK against `inputSchema` before `run` is called. Replaces the hand-rolled validation in the chat route. |
 | Fleet not running at startup | `connectFleet()` fails loudly with the existing `apra-fleet start` hint; the process exits 1. Unchanged from today's launchers. |
 | Fleet dies after startup | Tool calls return `isError` until the server is restarted. No reconnection. Documented limitation, not a regression — the chat layer behaves the same way today. |
-| Long-running tool call | `boilerplate` makes a real LLM call and can outlast a client-side timeout. Documented limitation; MCP progress notifications are the eventual fix. |
+| Long-running tool call | `boilerplate` makes a real LLM call and can outlast a client-side timeout. Documented limitation; progress notifications are the eventual fix. Cancellation at least stops the next phase from starting. |
+| Client cancels or disconnects | The abort signal reaches the workflow body, which stops at its next phase boundary. The SDK sends no response for a cancelled request. |
 
 Returning tool failures in-band rather than as protocol errors is the key choice: Claude sees
 the failure text and can retry, report, or choose another tool, where a protocol error would
@@ -226,12 +285,15 @@ Asserts:
 
 - the tool list is exactly `boilerplate` and `inspect-members`;
 - `inspect-members` advertises both parameters and `boilerplate` advertises none;
+- `inspect-members` advertises `readOnlyHint: true` and `boilerplate` does not;
 - calling `boilerplate` reaches `runBoilerplate`;
 - calling `inspect-members` with `{ members: ['BOILERPLATE-DOER'] }` touches only that member;
 - a throwing workflow yields an `isError` result carrying the message, **and a subsequent call
   still succeeds**;
 - invalid arguments are rejected before `run` executes;
-- an unknown tool name fails cleanly.
+- an unknown tool name fails cleanly;
+- aborting the call from the client stops the workflow at its next phase boundary — asserted
+  by a mock `fleetApi` that aborts partway and then verifying no further Fleet calls were made.
 
 Driving this over a real port rather than an in-memory transport is deliberate: it exercises
 `createMcpExpressApp` and the per-request transport wiring, which is where subtle bugs live.
@@ -256,7 +318,7 @@ Four documents describe the chat layer and go stale with this change.
 
 | Document | Change |
 |---|---|
-| `docs/chat-interface.md` | Deleted, replaced by `docs/mcp-interface.md`: tool catalog, registry contract, `claude mcp add` setup, adding a workflow, replacing the auth stub, hosting notes, troubleshooting. |
+| `docs/chat-interface.md` | Deleted, replaced by `docs/mcp-interface.md`: tool catalog, registry contract, `claude mcp add` setup, adding a workflow, replacing the auth stub, hosting notes, troubleshooting. Must also explain that a tool call is a single request/response with no progress signal, that workflow logs appear in the server's terminal rather than in the Claude session, and how cancellation behaves. |
 | `README.md` | Replace the "Chat interface" section with an MCP section. Update the layer diagram, the layout tree, the npm scripts, and the claim that `BOILERPLATE-REVIEWER` is idle. |
 | `docs/architecture.md` | Update the layer diagram, module map, data flow (a tool call replaces a chat request), the "where state lives" table (the sessions row goes), and the extension points table. **Most important fix:** the MCP concepts section currently states "This repo is purely an MCP **client**; there is no MCP server code here," which becomes false. |
 | `docs/development.md` | Update the run table, the testing section, and the "Adding a workflow" walkthrough, which currently instructs readers to append to `chat/registry.mjs` with a `run({ fleetApi, message, history })` signature. |
@@ -288,5 +350,7 @@ A Claude session then sees two tools and can run either.
    naming both members, with no LLM tokens spent inside this repo.
 5. Asking it to run the demo calls `boilerplate` and returns the `pong` result.
 6. A workflow failure reaches Claude as readable error text and the server keeps serving.
-7. No file under `workflows/` imports from `mcp/`.
-8. No `chat/` directory remains, and no doc references `POST /chat`.
+7. Cancelling a `boilerplate` call prevents the `agent()` phase from starting, so no tokens are
+   spent on a result nobody reads.
+8. No file under `workflows/` imports from `mcp/`.
+9. No `chat/` directory remains, and no doc references `POST /chat`.
