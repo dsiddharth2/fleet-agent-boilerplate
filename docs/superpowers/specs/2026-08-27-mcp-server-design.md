@@ -29,15 +29,30 @@ server on top, client to Fleet underneath.
 | Chat sessions | Deleted | Claude owns the conversation. Removes the in-memory `Map`, the 20-message cap, and the repo's only scaling constraint. |
 | Cancellation | Honored, cooperatively between phases | A cancelled or disconnected call otherwise keeps spending real tokens on `agent()` while the SDK discards the result. |
 | Tool annotations | Declared per entry | `readOnlyHint` lets a host auto-approve `inspect-members` and prompt before the side-effecting `boilerplate`. |
-| Progress notifications | Deferred | Whether Claude Code sends a `progressToken` and renders the messages is the client's choice, not ours. Ship without it, then decide with evidence. |
+| Long-running work | Tasks extension, `taskSupport: 'optional'` | A blocking HTTP tool call has only 60 seconds to its first response byte by default. One `agent()` round trip can exceed that, so blocking is not viable for `boilerplate`. |
+| Task state | Injectable store, in-memory default | Matches the repo's dependency-injection convention and adds no dependency. Tasks die with the process that runs them, and the spec permits answering "not found" for purged tasks. |
+| Progress notifications | Deferred | Tasks subsume the need: with poll-based status, every individual request is short, so no timer depends on a heartbeat. |
 
 Explicitly out of scope: a member that authors new workflows on demand, MCP progress
-notifications, `outputSchema` / `structuredContent`, Fleet reconnection, and real
-authentication. Concurrency and scaling are deferred.
+notifications, `outputSchema` / `structuredContent`, Fleet reconnection, real authentication,
+and a shared task store for multiple replicas. Concurrency and scaling are deferred.
 
 MCP's logging channel is **not** an option for streaming workflow output: it is deprecated as
-of protocol version 2026-07-28 (SEP-2577). Progress notifications are the sanctioned path if
-we later want workflow phases visible inside the Claude session.
+of protocol version 2026-07-28 (SEP-2577), with stderr or OpenTelemetry as the replacements.
+
+### Client timeouts that force this design
+
+Measured against Claude Code talking to an **HTTP** server. These are the constraints the
+Tasks decision follows from:
+
+| Timer | Default | Notes |
+|---|---|---|
+| Wall clock per tool call | ~28 hours | `MCP_TOOL_TIMEOUT`, or a per-server `timeout` in `.mcp.json`. Progress notifications do **not** extend it. Effectively a non-issue. |
+| **First response byte** | **60 seconds** | HTTP and SSE only. Rises only if `timeout` / `MCP_TOOL_TIMEOUT` is set to ≥60s; the 28-hour default does not feed it. **This is the timer a blocking `boilerplate` call would hit.** |
+| Idle | 5 minutes | Aborts a call that sends neither a response nor a progress notification in the window. `CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT`; `0` disables. 30 minutes for stdio. |
+
+Also relevant to tool output: Claude Code warns above 10,000 tokens and truncates at 25,000
+by default (`MAX_MCP_OUTPUT_TOKENS`), so `inspect-members` must cap its report.
 
 ## Architecture
 
@@ -62,7 +77,8 @@ stands alone.
 
 | File | Responsibility |
 |---|---|
-| `mcp/server.mjs` | `buildMcpServer({ fleetApi, registry })` → an `McpServer` with one tool per registry entry. Knows nothing about HTTP. |
+| `mcp/server.mjs` | `buildMcpServer({ fleetApi, registry, taskStore })` → an `McpServer` with one tool per registry entry. Knows nothing about HTTP. |
+| `mcp/tasks.mjs` | The task store interface and its in-memory implementation, plus the lifecycle helpers that move a task through `working` → `completed` / `failed` / `cancelled`. Knows nothing about HTTP or Fleet. |
 | `mcp/http.mjs` | `createMcpHttpApp({ buildServer, authenticate })` → express app serving `POST /mcp` and `GET /health`. Knows nothing about workflows. |
 | `mcp/main.mjs` | `startMcpServer({ fleetApi, port })`. Pins `APRA_FLEET_TRANSPORT=http`, calls `ensureApralabs()`, connects unless `fleetApi` is injected, listens, wires SIGINT/SIGTERM shutdown. Mirrors today's `chat/main.mjs`. |
 | `mcp/registry.mjs` | Moved from `chat/registry.mjs`. Entries gain an optional `inputSchema`. |
@@ -105,6 +121,10 @@ Stateless mode: a fresh transport **and** a fresh `McpServer` per request. `crea
 therefore takes `buildServer` as a factory rather than a prebuilt server instance, so no
 server state is ever shared between concurrent requests.
 
+The **task store is the one exception** and must outlive any single request, since `tasks/get`
+arrives on a later connection than the `tools/call` that created the task. It is created once
+in `mcp/main.mjs` and closed over by `buildServer`.
+
 ```js
 app.post('/mcp', authenticate, async (req, res) => {
   const server = buildServer();
@@ -132,6 +152,7 @@ itself, add it explicitly.
   description: '...',                      // Claude reads this to decide when to call it
   inputSchema: z.object({ /* … */ }),      // omit entirely to mean "no arguments"
   annotations: { readOnlyHint: true },     // behavior hints for the host
+  taskSupport: 'forbidden',                // 'optional' for slow workflows; default 'forbidden'
   async run({ fleetApi, args, signal }) { /* → string or object */ },
 }
 ```
@@ -143,6 +164,9 @@ itself, add it explicitly.
   it between phases (see Cancellation).
 - `annotations` are hints the host may act on — `readOnlyHint`, `destructiveHint`,
   `idempotentHint`. They never change how the SDK runs the tool.
+- `taskSupport` is passed to `registerTool` as `execution.taskSupport`. Use `'optional'` for
+  anything that can outrun the 60-second first-byte timer; omit it (defaulting to
+  `'forbidden'`) for fast workflows.
 - A returned string becomes the tool's text content. A returned object is JSON-serialized
   into text content.
 - A throwing `run` becomes an `isError` tool result (see Error handling).
@@ -156,6 +180,9 @@ No `inputSchema`, so the tool takes no arguments. `run({ fleetApi, signal })` ca
 `runBoilerplate({ fleetApi, signal })` and returns its result. Annotations declare
 `readOnlyHint: false` and `idempotentHint: true` — it registers members and spends tokens, but
 re-running it is safe because registration is idempotent.
+
+`taskSupport: 'optional'`, because its `agent()` phase can outrun the 60-second first-byte
+timer. This is the workflow that demonstrates the task path.
 
 The only body change is a cancellation check between phases. The five phases and the
 launcher/body split are otherwise untouched.
@@ -187,7 +214,9 @@ Body flow:
 4. Aggregate per-member JSON into one report: `{ generatedAt, members: [{ name, present, report | error }] }`.
 
 Annotations declare `readOnlyHint: true` and `idempotentHint: true`, so a host may auto-approve
-it.
+it. `taskSupport` is omitted, defaulting to `'forbidden'` — it runs in seconds and spends no
+tokens, so it stays a plain blocking call. Between the two workflows the boilerplate therefore
+demonstrates **both** execution paths.
 
 Three deliberate properties:
 
@@ -204,6 +233,10 @@ Three deliberate properties:
 working directory, so it can be run standalone as a smoke test the way the README already
 suggests for `dummy.py`. It reports the work folder path, whether it exists, a file count,
 total bytes, and — when `--files` is passed — a listing of top-level entries.
+
+That listing is **capped** (a fixed maximum number of entries, with a count of how many were
+omitted). Claude Code truncates tool output at 25,000 tokens by default, so an uncapped
+listing of a large work folder would silently lose the end of the report.
 
 ## How a call starts, reports, and finishes
 
@@ -227,21 +260,71 @@ One asymmetry to document for users: `phase()` and `log()` output goes to the te
 `npm run mcp`, so the operator sees live progress while Claude sees nothing until the call
 returns.
 
+That is the **direct** path, used by fast tools. `boilerplate` uses the task path instead.
+
+## Long-running work: the Tasks extension
+
+A blocking HTTP tool call has 60 seconds to produce its first response byte. A single
+`agent()` round trip can exceed that, so `boilerplate` cannot be a blocking call. The
+2026-07-28 spec's answer is the `io.modelcontextprotocol/tasks` extension (SEP-2663), which
+`@modelcontextprotocol/server@2.0.0` supports: `registerTool` accepts
+`execution: { taskSupport }`, and the package exports `Task`, `TaskStatus`, `TaskMetadata`,
+`CreateTaskResult`, `GetTaskRequest`, `ListTasksRequest`, `CancelTaskRequest`,
+`TaskStatusNotification`, `isTaskAugmentedRequestParams`, and `RELATED_TASK_META_KEY`.
+
+The tool returns a task handle immediately and Claude polls for the outcome, so **every
+request is short and no timer is ever at risk**:
+
+```text
+Claude ──tools/call (declares the tasks extension)──▶ create task, start work, return
+Claude ◀──── CreateTaskResult { taskId, status: 'working', pollIntervalMs, ttlMs }
+                              … workflow runs in the background …
+Claude ──tasks/get { taskId }──▶  { status: 'working' }        (repeats)
+Claude ──tasks/get { taskId }──▶  { status: 'completed', result: { content: [ … ] } }
+```
+
+`taskSupport: 'optional'` means a client that does **not** declare the extension still gets an
+ordinary blocking result, so both paths must work. The spec forbids returning a task to a
+client that did not declare support.
+
+### Task store
+
+An injectable interface, in-memory by default, created once in `mcp/main.mjs`:
+
+| Operation | Purpose |
+|---|---|
+| `create({ owner, tool })` | Record a `working` task and return its id. Must complete **before** the id is returned, so a `tasks/get` immediately after always resolves. |
+| `get(taskId)` | Current state, including `result` on `completed` or `error` on `failed`. |
+| `settle(taskId, outcome)` | Move to a terminal state. Terminal states are immutable. |
+| `cancel(taskId)` | Abort the running work and mark the task `cancelled`. |
+| `list({ owner })` | Backs `tasks/list`. |
+
+The store holds an `AbortController` per running task, which is how `tasks/cancel` reaches the
+workflow. Tasks are keyed to an `owner` taken from `req.user.id`, and every task request
+verifies ownership — the spec treats task ids as bearer tokens for server state. With the
+pass-through auth stub every caller is `anonymous`, so the check is a no-op today, but it is
+written now so real auth makes it meaningful without a redesign.
+
+In-memory means a restart loses tasks. That is acceptable because the workflow running a task
+dies with the same process, and the spec explicitly permits answering "not found" for a purged
+task. `ttlMs` and `pollIntervalMs` are configured with conservative defaults and expired
+tasks are reaped.
+
 ### Cancellation
 
-`ctx.mcpReq.signal` aborts when Claude cancels the call or the connection drops, and the SDK
-discards whatever a cancelled handler eventually returns. Without handling it, a cancelled
-`boilerplate` run keeps spending real tokens on `agent()` for a result nobody will read.
+Two paths lead to the same place. A direct call aborts via `ctx.mcpReq.signal` when Claude
+cancels or the connection drops. A task aborts via `tasks/cancel`, which triggers the
+`AbortController` the store holds for it.
 
-The signal is forwarded from the tool handler into `run({ signal })`, then into the launcher
-as `runBoilerplate({ fleetApi, signal })` / `runInspectMembers({ fleetApi, signal, … })`, and
+Either way the signal is forwarded into `run({ signal })`, then into the launcher as
+`runBoilerplate({ fleetApi, signal })` / `runInspectMembers({ fleetApi, signal, … })`, and
 reaches the body through the engine's `args`. Bodies check `signal?.aborted` **between
 phases** and return early with what they have.
 
-This is deliberately **cooperative and coarse-grained**. An in-flight Fleet MCP call cannot be
-aborted mid-flight, so cancelling does not kill the current step — it prevents the *next* one
-from starting. For `boilerplate` that is still the thing that matters, because it stops the
-`agent()` phase from ever beginning.
+This is deliberately **cooperative and coarse-grained**, which the spec also assumes of
+`tasks/cancel`. An in-flight Fleet MCP call cannot be aborted mid-flight, so cancelling does
+not kill the current step — it prevents the *next* one from starting. For `boilerplate` that
+is the thing that matters, because it stops the `agent()` phase from ever beginning.
 
 ## Error handling
 
@@ -254,8 +337,12 @@ MCP separates protocol failures from tool failures, and this design uses that sp
 | Invalid tool arguments | Rejected by the SDK against `inputSchema` before `run` is called. Replaces the hand-rolled validation in the chat route. |
 | Fleet not running at startup | `connectFleet()` fails loudly with the existing `apra-fleet start` hint; the process exits 1. Unchanged from today's launchers. |
 | Fleet dies after startup | Tool calls return `isError` until the server is restarted. No reconnection. Documented limitation, not a regression — the chat layer behaves the same way today. |
-| Long-running tool call | `boilerplate` makes a real LLM call and can outlast a client-side timeout. Documented limitation; progress notifications are the eventual fix. Cancellation at least stops the next phase from starting. |
-| Client cancels or disconnects | The abort signal reaches the workflow body, which stops at its next phase boundary. The SDK sends no response for a cancelled request. |
+| Workflow throws inside a task | The task settles as `failed` with the message in its `error` field. The `tools/call` that created it already returned successfully, so nothing is lost. |
+| Client cancels or disconnects a direct call | The abort signal reaches the workflow body, which stops at its next phase boundary. The SDK sends no response for a cancelled request. |
+| `tasks/cancel` | Acknowledged immediately; the store aborts the run and the task settles as `cancelled` once the body reaches its next phase boundary. Cooperative, per the spec. |
+| `tasks/get` for an unknown or expired id | A not-found error, which the spec permits for purged tasks. |
+| `tasks/get` for another owner's task | Treated as not found rather than forbidden, so task ids cannot be probed. |
+| Client does not declare the tasks extension | The tool runs as an ordinary blocking call. Both paths are supported and both are tested. |
 
 Returning tool failures in-band rather than as protocol errors is the key choice: Claude sees
 the failure text and can retry, report, or choose another tool, where a protocol error would
@@ -295,6 +382,21 @@ Asserts:
 - aborting the call from the client stops the workflow at its next phase boundary — asserted
   by a mock `fleetApi` that aborts partway and then verifying no further Fleet calls were made.
 
+**`tests/mcp-tasks.test.mjs`** (mock). Covers the task lifecycle with a mock `fleetApi` whose
+`executePrompt` is gated on a promise the test controls, so timing is deterministic rather
+than slept on:
+
+- calling `boilerplate` as a task returns a `taskId` with status `working`, and a `tasks/get`
+  issued immediately afterwards resolves — the durability requirement;
+- polling reports `working`, then `completed` with the workflow result;
+- a throwing workflow settles the task as `failed` with the message in `error`;
+- `tasks/cancel` settles it as `cancelled` and no further Fleet calls are made;
+- a terminal task cannot change state;
+- an unknown, expired, or other-owner `taskId` comes back as not found;
+- a client that does **not** declare the tasks extension gets an ordinary blocking result from
+  the same tool;
+- `inspect-members` always runs directly, since its `taskSupport` is `'forbidden'`.
+
 Driving this over a real port rather than an in-memory transport is deliberate: it exercises
 `createMcpExpressApp` and the per-request transport wiring, which is where subtle bugs live.
 
@@ -309,7 +411,7 @@ to end. Cheap because it spends no tokens. Complements the existing
 
 **Standalone smoke:** `python3 workflows/inspect-members/inspect.py --root workdir/BOILERPLATE-DOER`.
 
-`package.json` scripts: `test` drops `tests/chat.test.mjs` and adds the two new mock test
+`package.json` scripts: `test` drops `tests/chat.test.mjs` and adds the three new mock test
 files; `chat` is replaced by `mcp` running `node mcp/main.mjs`.
 
 ## Documentation
@@ -318,10 +420,33 @@ Four documents describe the chat layer and go stale with this change.
 
 | Document | Change |
 |---|---|
-| `docs/chat-interface.md` | Deleted, replaced by `docs/mcp-interface.md`: tool catalog, registry contract, `claude mcp add` setup, adding a workflow, replacing the auth stub, hosting notes, troubleshooting. Must also explain that a tool call is a single request/response with no progress signal, that workflow logs appear in the server's terminal rather than in the Claude session, and how cancellation behaves. |
+| `docs/chat-interface.md` | Deleted, replaced by `docs/mcp-interface.md`: tool catalog, registry contract, `claude mcp add` setup, adding a workflow, replacing the auth stub, hosting notes, troubleshooting. Must also explain the direct versus task execution paths, the client timeout table, that workflow logs appear in the server's terminal rather than in the Claude session, and how cancellation behaves on both paths. |
 | `README.md` | Replace the "Chat interface" section with an MCP section. Update the layer diagram, the layout tree, the npm scripts, and the claim that `BOILERPLATE-REVIEWER` is idle. |
 | `docs/architecture.md` | Update the layer diagram, module map, data flow (a tool call replaces a chat request), the "where state lives" table (the sessions row goes), and the extension points table. **Most important fix:** the MCP concepts section currently states "This repo is purely an MCP **client**; there is no MCP server code here," which becomes false. |
 | `docs/development.md` | Update the run table, the testing section, and the "Adding a workflow" walkthrough, which currently instructs readers to append to `chat/registry.mjs` with a `run({ fleetApi, message, history })` signature. |
+
+## Implementation sequencing
+
+**Step 0 — spike, before anything else is built.** The SDK exports the task types and accepts
+`execution.taskSupport`, but exports no task-store abstraction, so how much of the lifecycle it
+owns is unresolved. Determine against the real package: does `McpServer` answer `tasks/get`
+from its own bookkeeping, or must we register those handlers and hold the state? How does a
+tool handler return a `CreateTaskResult` versus a direct result? How does a client declare the
+extension per request, which the mock tests need in order to exercise both paths? The answers
+decide how much of `mcp/tasks.mjs` is ours to write. Record them before planning further.
+
+**Phase 1 — the MCP server layer.** `mcp/server.mjs`, `mcp/http.mjs`, `mcp/main.mjs`, the
+moved registry and helpers, `inspect-members`, annotations, cancellation via
+`ctx.mcpReq.signal`, `tests/mcp.test.mjs`, `tests/inspect-members.test.mjs`, and deletion of
+`chat/`. Every tool blocks in this phase. At the end of it a Claude session can connect and
+call both tools, with `inspect-members` fully working and `boilerplate` viable on fast runs.
+
+**Phase 2 — tasks.** `mcp/tasks.mjs`, `taskSupport` on registry entries, the `tasks/*` surface,
+ownership checks, TTL reaping, `boilerplate` switched to `taskSupport: 'optional'`, and
+`tests/mcp-tasks.test.mjs`.
+
+Docs land with the phase that makes them true. Phase 1 is independently shippable; Phase 2 is
+what makes slow workflows reliable.
 
 ## Setup, end to end
 
@@ -350,7 +475,11 @@ A Claude session then sees two tools and can run either.
    naming both members, with no LLM tokens spent inside this repo.
 5. Asking it to run the demo calls `boilerplate` and returns the `pong` result.
 6. A workflow failure reaches Claude as readable error text and the server keeps serving.
-7. Cancelling a `boilerplate` call prevents the `agent()` phase from starting, so no tokens are
-   spent on a result nobody reads.
-8. No file under `workflows/` imports from `mcp/`.
-9. No `chat/` directory remains, and no doc references `POST /chat`.
+7. A `boilerplate` call whose `agent()` phase takes longer than 60 seconds still completes,
+   because it runs as a task rather than a blocking call.
+8. Cancelling a `boilerplate` run — by aborting a direct call or via `tasks/cancel` — prevents
+   the `agent()` phase from starting, so no tokens are spent on a result nobody reads.
+9. A `tasks/get` issued immediately after a task is created always resolves.
+10. A client that does not declare the tasks extension can still call every tool.
+11. No file under `workflows/` imports from `mcp/`.
+12. No `chat/` directory remains, and no doc references `POST /chat`.
