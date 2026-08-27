@@ -67,7 +67,7 @@ workflows/boilerplate/
   main.mjs              # runBoilerplate() — connectFleet, execute, exit
   boilerplate.js        # dummy phases (register, status, command, transform, agent)
   dummy.py              # prints hello-from-python
-  ensure-apralabs.mjs   # symlink node_modules/@apralabs → ~/.apra-fleet/…
+  ensure-apralabs.mjs   # symlink node_modules/@apralabs → Fleet install (local or npm global)
   package.json          # { "type": "module" }
   workflow.json         # metadata only; not used as a Fleet CLI workflow
 workflows/inspect-members/
@@ -283,7 +283,7 @@ Do not pass OAuth tokens into `agent()`. Do not clone `apra-fleet` into this rep
 | `"host" is required for remote members` | Add `--type local` to `register-member`. |
 | `Member "…" not found` on `auth` | Register the member first, then `auth`. |
 | `OAuth session expired` / `claude auth status` logged-in is false for the member | `claude setup-token`, then `apra-fleet auth --oauth --member BOILERPLATE-DOER "$(tr -d '\r\n' < .token)"`. |
-| `Cannot find package 'undici'` | Stale `node_modules/@apralabs` symlink. `ensureApralabs()` should retarget `~/.apra-fleet/node_modules/@apralabs`. Delete a leftover repo-local `.fleet-src` if you created one. |
+| `Cannot find package 'undici'` | Stale `node_modules/@apralabs` symlink. `ensureApralabs()` checks `~/.apra-fleet/node_modules/@apralabs` first, then the npm global prefix. Delete a leftover repo-local `.fleet-src` if you created one. |
 | Extra member named `doer` in `fleet status` | Leftover from experiments. The dummy workflow does not use it. |
 | Live run prints `pong` but the shell does not return | Update `main.mjs` (transport `stop()` + `process.exit(0)`). Ctrl+C the hung client; the Fleet server can stay up. |
 

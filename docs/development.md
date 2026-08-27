@@ -23,9 +23,10 @@ npm install                                  # installs the MCP and HTTP depende
 ```
 
 `npm install` does **not** install Fleet's packages. `@apralabs/apra-fleet-workflow` and
-`@apralabs/apra-fleet-client` resolve at runtime through a symlink into
-`~/.apra-fleet/node_modules`, created automatically by `ensureApralabs()`. This is
-intentional — Fleet is a machine install, not a project dependency.
+`@apralabs/apra-fleet-client` resolve at runtime through a symlink created automatically
+by `ensureApralabs()`. It checks `~/.apra-fleet/node_modules/@apralabs` first, then falls
+back to the npm global prefix (where `npm install -g @apralabs/apra-fleet` lands). This
+is intentional — Fleet is a machine install, not a project dependency.
 
 ### Provisioning members
 
@@ -202,7 +203,7 @@ calls inside the container still need an LLM CLI present.
 | Symptom | Cause and fix |
 |---|---|
 | `connectFleet() failed` / MCP entry not found | Fleet server is down. `cd ~/.apra-fleet/bin && apra-fleet start`. |
-| `Cannot find package 'undici'` | Stale `node_modules/@apralabs` symlink. `ensureApralabs()` should retarget it; delete any leftover `.fleet-src`. |
+| `Cannot find package 'undici'` | Stale `node_modules/@apralabs` symlink. `ensureApralabs()` checks `~/.apra-fleet/node_modules` first, then the npm global prefix; delete any leftover `.fleet-src`. |
 | `"host" is required for remote members` | Add `--type local` to `register-member`. |
 | `Member "…" not found` on `auth` | Register the member before authenticating it. |
 | `OAuth session expired` | `claude setup-token`, then re-run `apra-fleet auth --oauth --member BOILERPLATE-DOER …`. |

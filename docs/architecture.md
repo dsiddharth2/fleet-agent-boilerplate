@@ -182,9 +182,10 @@ pinned. An explicitly set value is respected.
 
 **`@apralabs` packages resolve through a symlink.** The root `package.json` deliberately
 does not depend on any `@apralabs/*` package; Fleet is a machine install, not a project
-dependency. `ensureApralabs()` links `node_modules/@apralabs` to
-`~/.apra-fleet/node_modules/@apralabs` before any dynamic import. It verifies the link
-target with `realpathSync` and relinks when stale, which is what fixes the
+dependency. `ensureApralabs()` links `node_modules/@apralabs` to whichever location
+actually contains the packages: first `~/.apra-fleet/node_modules/@apralabs`, then the
+npm global prefix (where `npm install -g @apralabs/apra-fleet` lands). It verifies the
+link target with `realpathSync` and relinks when stale, which is what fixes the
 `Cannot find package 'undici'` symptom. It uses `'junction'` so Windows does not require
 admin rights; POSIX ignores the argument.
 
