@@ -20,8 +20,12 @@ export function createMcpHttpApp({ buildServer, authenticate = defaultAuthentica
     // concurrent calls, and no MCP session ids are issued.
     const server = buildServer();
     const transport = new NodeStreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-    await server.connect(transport);
-    await transport.handleRequest(req, res, req.body);
+    try {
+      await server.connect(transport);
+      await transport.handleRequest(req, res, req.body);
+    } finally {
+      await server.close();
+    }
   });
 
   return app;

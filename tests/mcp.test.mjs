@@ -1,6 +1,7 @@
 import './setup-fleet-modules.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { request as httpRequest } from 'node:http';
 import * as z from 'zod/v4';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 
@@ -59,6 +60,20 @@ async function withServer(registryOverride, run) {
   } finally {
     await client.close();
     await new Promise((resolve) => httpServer.close(resolve));
+  }
+}
+
+async function within(promise, milliseconds, message) {
+  let timer;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), milliseconds);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -178,4 +193,77 @@ test('a client that does not request progress still gets the result', async () =
     assert.equal(result.isError, undefined);
     assert.ok(JSON.parse(result.content[0].text).members.length >= 1);
   });
+});
+
+test('disconnecting a client closes the request server and aborts its workflow', async () => {
+  let resolveStarted;
+  let resolveAborted;
+  let resolveClosed;
+  const started = new Promise((resolve) => {
+    resolveStarted = resolve;
+  });
+  const aborted = new Promise((resolve) => {
+    resolveAborted = resolve;
+  });
+  const closed = new Promise((resolve) => {
+    resolveClosed = resolve;
+  });
+  const registry = [
+    {
+      name: 'slow',
+      description: 'waits for cancellation',
+      async run({ signal }) {
+        resolveStarted();
+        await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }));
+        resolveAborted();
+        return 'cancelled';
+      },
+    },
+  ];
+  const fleetApi = createMockFleetApi();
+  const app = createMcpHttpApp({
+    buildServer: () => {
+      const server = buildMcpServer({ fleetApi, registry });
+      server.server.onclose = resolveClosed;
+      return server;
+    },
+  });
+  const httpServer = app.listen(0, '127.0.0.1');
+  await new Promise((resolve, reject) => {
+    httpServer.once('listening', resolve);
+    httpServer.once('error', reject);
+  });
+
+  const body = JSON.stringify({
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'tools/call',
+    params: { name: 'slow', arguments: {} },
+  });
+  const request = httpRequest({
+    hostname: '127.0.0.1',
+    port: httpServer.address().port,
+    path: '/mcp',
+    method: 'POST',
+    headers: {
+      accept: 'application/json, text/event-stream',
+      'content-type': 'application/json',
+      'content-length': Buffer.byteLength(body),
+    },
+  });
+  request.on('error', () => {});
+  request.end(body);
+
+  try {
+    await within(started, 1_000, 'timed out waiting for workflow to start');
+    request.destroy();
+    await within(
+      Promise.all([closed, aborted]),
+      1_000,
+      'timed out waiting for request cleanup to abort the workflow',
+    );
+  } finally {
+    request.destroy();
+    await new Promise((resolve) => httpServer.close(resolve));
+  }
 });
