@@ -1,0 +1,5 @@
+{
+  "name": "inspect-members",
+  "description": "Reports on the work folders of this repo's Fleet members. Metadata only; not registered as an apra-fleet CLI workflow.",
+  "entry": "main.mjs"
+}

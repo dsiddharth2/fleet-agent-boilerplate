@@ -1,9 +1,10 @@
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { ensureApralabs } from '../workflows/boilerplate/ensure-apralabs.mjs';
-import { createChatApp } from './app.mjs';
+import { createMcpHttpApp } from './http.mjs';
+import { buildMcpServer } from './server.mjs';
 
-export async function startChatServer({ fleetApi, port } = {}) {
+export async function startMcpServer({ fleetApi, port } = {}) {
   // Attach to `apra-fleet start` (where members + OAuth were provisioned) —
   // same reasoning as workflows/boilerplate/main.mjs.
   if (!process.env.APRA_FLEET_TRANSPORT) {
@@ -28,14 +29,41 @@ export async function startChatServer({ fleetApi, port } = {}) {
     }
   }
 
-  const app = createChatApp({ fleetApi: api });
+  const app = createMcpHttpApp({ buildServer: () => buildMcpServer({ fleetApi: api }) });
   const listenPort = port ?? Number(process.env.PORT ?? 3000);
-  const server = app.listen(listenPort);
-  await new Promise((resolve, reject) => {
-    server.once('listening', resolve);
-    server.once('error', reject);
-  });
-  console.log(`chat server listening on http://127.0.0.1:${server.address().port}`);
+  // Bind loopback by default. Hosting this on a VM needs an explicit bind
+  // address AND real authentication — see docs/mcp-interface.md.
+  let server;
+  try {
+    server = app.listen(listenPort, '127.0.0.1');
+    await new Promise((resolve, reject) => {
+      const onListening = () => {
+        server.off('error', onError);
+        resolve();
+      };
+      const onError = (err) => {
+        server.off('listening', onListening);
+        reject(err);
+      };
+      server.once('listening', onListening);
+      server.once('error', onError);
+    });
+  } catch (err) {
+    if (server) {
+      try {
+        await new Promise((resolve) => server.close(() => resolve()));
+      } catch {
+        // Preserve the listener error after best-effort HTTP cleanup.
+      }
+    }
+    try {
+      await transport?.stop?.();
+    } catch {
+      // Preserve the listener error after best-effort Fleet cleanup.
+    }
+    throw err;
+  }
+  console.log(`MCP server listening on http://127.0.0.1:${server.address().port}/mcp`);
 
   const close = async () => {
     await new Promise((resolve) => server.close(resolve));
@@ -52,7 +80,7 @@ function isMainModule() {
 
 if (isMainModule()) {
   try {
-    const { close } = await startChatServer();
+    const { close } = await startMcpServer();
     const shutdown = async () => {
       await close();
       process.exit(0);

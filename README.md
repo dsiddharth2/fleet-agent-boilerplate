@@ -22,8 +22,7 @@ This repo does **not** vendor Fleet. `@apralabs/apra-fleet-workflow` and `@apral
 Two layers over a Fleet server you run yourself.
 
 ```text
-chat/        POST /chat — an LLM routing call picks a registered workflow,
-  │          or the doer answers directly. Optional front door.
+mcp/         POST /mcp — one MCP tool per registry entry
   ▼
 workflows/   runBoilerplate() — connects, then runs the workflow body
   │
@@ -33,7 +32,9 @@ Fleet server — owns members, credentials, and spawns the LLM CLI
   BOILERPLATE-REVIEWER      workdir/BOILERPLATE-REVIEWER/
 ```
 
-`chat/` imports from `workflows/`; nothing under `workflows/` imports from `chat/`. Delete the chat layer and the workflow layer still stands.
+`mcp/` imports from `workflows/`; nothing under `workflows/` imports from `mcp/`.
+The MCP layer is a stateless front door, while each workflow remains independently
+callable and testable.
 
 Four ideas explain most of the code:
 
@@ -66,19 +67,27 @@ workflows/boilerplate/
   main.mjs              # runBoilerplate() — connectFleet, execute, exit
   boilerplate.js        # dummy phases (register, status, command, transform, agent)
   dummy.py              # prints hello-from-python
-  ensure-apralabs.mjs   # symlink node_modules/@apralabs → ~/.apra-fleet/…
+  ensure-apralabs.mjs   # symlink node_modules/@apralabs → Fleet install (local or npm global)
   package.json          # { "type": "module" }
   workflow.json         # metadata only; not used as a Fleet CLI workflow
-chat/
-  main.mjs              # startChatServer() — connectFleet, listen, graceful close
-  app.mjs, router.mjs, registry.mjs, auth.mjs, fleet-text.mjs
+workflows/inspect-members/
+  main.mjs, inspect-members.js, inspect.py, workflow.json
+mcp/
+  main.mjs              # connect to Fleet, listen on loopback, graceful close
+  server.mjs            # expose one MCP tool per registry entry
+  http.mjs              # stateless POST /mcp and GET /health transport
+  registry.mjs          # tool catalog and workflow adapters
+  auth.mjs              # injectable pass-through auth stub
+  fleet-text.mjs        # extract text from Fleet MCP results
 docs/
   architecture.md       # how it fits together + Fleet concepts primer
   development.md        # setup, testing, adding a workflow, conventions
-  chat-interface.md     # full /chat reference
+  mcp-interface.md      # MCP setup, tool, registry, timeout, and hosting reference
 tests/
   boilerplate.test.mjs  # mock fleetApi — no live server, no tokens
-  chat.test.mjs         # mock fleetApi — auth, router, registry, routes
+  inspect-members.test.mjs # mock fleetApi — no live server, no tokens
+  mcp.test.mjs          # real MCP client and port, mock Fleet, no tokens
+  mcp.live.test.mjs     # real MCP and Fleet servers, no tokens
   boilerplate.live.test.mjs  # real server, real member, real token
   setup-fleet-modules.mjs
 scripts/
@@ -91,7 +100,8 @@ Dockerfile
 docker-compose.yml
 ```
 
-Dummy `command()` and `agent()` run on **BOILERPLATE-DOER** only. REVIEWER is registered so a later product can dispatch to a second member.
+Dummy `command()` and `agent()` run on **BOILERPLATE-DOER** only.
+`inspect-members` inspects both DOER and REVIEWER by default.
 
 ---
 
@@ -193,30 +203,21 @@ The process should print `agent result: pong` and **return to the shell** (exit 
 
 ---
 
-## Chat interface
+## MCP interface
 
-`POST /chat` sits ABOVE the workflows: an LLM routing call to **BOILERPLATE-DOER**
-matches each question against the workflow registry (`chat/registry.mjs`); a match runs
-that workflow, otherwise DOER answers directly. The response's `workflow` field says
-which. Multi-turn: pass back the returned `sessionId`. History is in-memory (lost on
-restart), capped at 20 messages per session. Auth is a stub (`chat/auth.mjs`) — inject
-real middleware via `createChatApp({ authenticate })`. New workflows become routable by
-appending `{ name, description, run }` to the registry.
+The MCP server exposes one tool for each entry in `mcp/registry.mjs`. Claude chooses
+between the token-spending `boilerplate` demo and the read-only, no-token
+`inspect-members` report from their descriptions.
 
 ```bash
-npm install                      # once: installs express
-npm run chat                     # needs Fleet running + members provisioned (see above)
-
-curl -s -X POST http://127.0.0.1:3000/chat \
-  -H "content-type: application/json" \
-  -d '{"message":"hello"}'
-# → {"sessionId":"…","reply":"…","workflow":"direct"}   — send sessionId back for follow-ups
+npm install
+npm run mcp
+claude mcp add --transport http fleet http://127.0.0.1:3000/mcp
 ```
 
-Mock tests (no server, no tokens): `node --test tests/chat.test.mjs`.
-
-**Full reference: [docs/chat-interface.md](docs/chat-interface.md)** — API details,
-routing behavior, adding workflows to the registry, replacing the auth stub,
+The server needs Fleet running and members provisioned. The default bind is loopback
+only. **Full reference: [docs/mcp-interface.md](docs/mcp-interface.md)** — setup, tools,
+the registry contract, timeouts, cancellation, authentication, hosting, and
 troubleshooting.
 
 ---
@@ -282,7 +283,7 @@ Do not pass OAuth tokens into `agent()`. Do not clone `apra-fleet` into this rep
 | `"host" is required for remote members` | Add `--type local` to `register-member`. |
 | `Member "…" not found` on `auth` | Register the member first, then `auth`. |
 | `OAuth session expired` / `claude auth status` logged-in is false for the member | `claude setup-token`, then `apra-fleet auth --oauth --member BOILERPLATE-DOER "$(tr -d '\r\n' < .token)"`. |
-| `Cannot find package 'undici'` | Stale `node_modules/@apralabs` symlink. `ensureApralabs()` should retarget `~/.apra-fleet/node_modules/@apralabs`. Delete a leftover repo-local `.fleet-src` if you created one. |
+| `Cannot find package 'undici'` | Stale `node_modules/@apralabs` symlink. `ensureApralabs()` checks `~/.apra-fleet/node_modules/@apralabs` first, then the npm global prefix. Delete a leftover repo-local `.fleet-src` if you created one. |
 | Extra member named `doer` in `fleet status` | Leftover from experiments. The dummy workflow does not use it. |
 | Live run prints `pong` but the shell does not return | Update `main.mjs` (transport `stop()` + `process.exit(0)`). Ctrl+C the hung client; the Fleet server can stay up. |
 
@@ -294,7 +295,7 @@ Do not pass OAuth tokens into `agent()`. Do not clone `apra-fleet` into this rep
 |----------|--------|
 | [docs/architecture.md](docs/architecture.md) | Fleet concepts, the layer diagram, module map, data flow, and the reasoning behind each design decision |
 | [docs/development.md](docs/development.md) | First-time setup, provisioning, the mock vs. live test split, adding a workflow end to end, conventions |
-| [docs/chat-interface.md](docs/chat-interface.md) | `POST /chat` API reference, routing, sessions, registry, replacing the auth stub |
+| [docs/mcp-interface.md](docs/mcp-interface.md) | MCP setup, tool catalog, registry contract, execution limits, auth, hosting, and troubleshooting |
 
 ---
 

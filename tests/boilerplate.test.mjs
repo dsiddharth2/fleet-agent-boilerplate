@@ -83,3 +83,41 @@ test('runBoilerplate registers members, runs python command, and smokes agent', 
     're-run should not register members that status already lists',
   );
 });
+
+test('an aborted signal prevents the agent phase from spending tokens', async () => {
+  const fleetApi = createMockFleetApi();
+  const controller = new AbortController();
+  controller.abort();
+
+  const result = await runBoilerplate({ fleetApi, signal: controller.signal });
+  assert.equal(result.cancelled, true);
+  assert.equal(fleetApi.promptCalls.length, 0, 'executePrompt must not run after abort');
+});
+
+test('aborting on the final progress notification prevents the agent call', async () => {
+  const fleetApi = createMockFleetApi();
+  const controller = new AbortController();
+
+  const result = await runBoilerplate({
+    fleetApi,
+    signal: controller.signal,
+    reportPhase(message) {
+      if (message === 'dispatching the agent prompt') controller.abort();
+    },
+  });
+
+  assert.equal(result.cancelled, true);
+  assert.equal(fleetApi.promptCalls.length, 0, 'executePrompt must not run after final progress');
+});
+
+test('reportPhase receives one message per phase and is optional', async () => {
+  const phases = [];
+  await runBoilerplate({
+    fleetApi: createMockFleetApi(),
+    reportPhase: (message) => phases.push(message),
+  });
+  assert.ok(phases.length >= 5, `expected a message per phase, got ${phases.length}`);
+
+  // Omitting reportPhase must not throw.
+  await runBoilerplate({ fleetApi: createMockFleetApi() });
+});

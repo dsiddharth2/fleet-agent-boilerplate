@@ -1,16 +1,23 @@
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { ensureApralabs } from './ensure-apralabs.mjs';
+// Shared with the boilerplate workflow on purpose: duplicating the symlink
+// logic would mean two places to fix when the Fleet install layout changes.
+import { ensureApralabs } from '../boilerplate/ensure-apralabs.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const engineScript = path.join(here, 'boilerplate.js');
+const engineScript = path.join(here, 'inspect-members.js');
 
 export const selfExecuting = true;
 
-export async function runBoilerplate({ fleetApi, signal, reportPhase } = {}) {
-  // Attach to `apra-fleet start` (where members + OAuth were provisioned).
-  // Unset transport would fall back to stdio spawn, which cannot find the
-  // npm-global server layout and would also miss those members.
+export async function runInspectMembers({
+  fleetApi,
+  members,
+  includeFiles,
+  signal,
+  reportPhase,
+} = {}) {
+  // Attach to `apra-fleet start` (where members were provisioned). Unset
+  // transport would fall back to a stdio spawn that cannot see them.
   if (!process.env.APRA_FLEET_TRANSPORT) {
     process.env.APRA_FLEET_TRANSPORT = 'http';
   }
@@ -35,9 +42,23 @@ export async function runBoilerplate({ fleetApi, signal, reportPhase } = {}) {
   }
 
   try {
-    const workflow = new FleetWorkflow(api);
+    // WorkflowEngine consumes failSoft before dispatch. Keep it observable to
+    // injected APIs without letting FleetApi serialize it into the MCP payload.
+    const workflowApi = {
+      executeCommand(options) {
+        Object.defineProperty(options, 'failSoft', { value: true, enumerable: false });
+        return api.executeCommand(options);
+      },
+    };
+    const workflow = new FleetWorkflow(workflowApi);
     const engine = new WorkflowEngine(workflow);
-    return await engine.executeFile(engineScript, { fleetApi: api, signal, reportPhase });
+    return await engine.executeFile(engineScript, {
+      fleetApi: api,
+      members,
+      includeFiles,
+      signal,
+      reportPhase,
+    });
   } finally {
     transport?.stop?.();
   }
@@ -51,7 +72,8 @@ function isMainModule() {
 
 if (isMainModule()) {
   try {
-    await runBoilerplate();
+    const report = await runInspectMembers();
+    console.log(JSON.stringify(report, null, 2));
     process.exit(0);
   } catch (err) {
     console.error(err?.message ?? err);
