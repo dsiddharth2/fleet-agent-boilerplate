@@ -1,9 +1,8 @@
 import './setup-fleet-modules.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { EventEmitter } from 'node:events';
-import { request as httpRequest } from 'node:http';
-import express from 'express';
+import { once } from 'node:events';
+import { createServer as createHttpServer, request as httpRequest } from 'node:http';
 import * as z from 'zod/v4';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 
@@ -80,29 +79,33 @@ async function within(promise, milliseconds, message) {
   }
 }
 
-test('startMcpServer closes a half-open HTTP server when listening fails', async (t) => {
-  const listenError = Object.assign(new Error('address already in use'), { code: 'EADDRINUSE' });
-  const server = new EventEmitter();
-  server.listening = true;
-  let closeCalls = 0;
-  server.close = (callback) => {
-    closeCalls += 1;
-    server.listening = false;
-    callback();
-  };
+test('startMcpServer rejects a real port collision', async () => {
+  const occupyingServer = createHttpServer();
+  occupyingServer.listen(0, '127.0.0.1');
+  await once(occupyingServer, 'listening');
 
-  t.mock.method(express.application, 'listen', function listen(port, host) {
-    assert.equal(port, 30_001);
-    assert.equal(host, '127.0.0.1');
-    queueMicrotask(() => server.emit('error', listenError));
-    return server;
-  });
+  try {
+    const port = occupyingServer.address().port;
+    await assert.rejects(
+      within(
+        startMcpServer({ fleetApi: createMockFleetApi(), port }),
+        1_000,
+        'timed out waiting for the port collision to reject',
+      ),
+      (err) => err?.code === 'EADDRINUSE',
+    );
+  } finally {
+    await new Promise((resolve) => occupyingServer.close(resolve));
+  }
+});
 
-  await assert.rejects(
-    startMcpServer({ fleetApi: createMockFleetApi(), port: 30_001 }),
-    (err) => err === listenError,
-  );
-  assert.equal(closeCalls, 1);
+test('startMcpServer removes its startup error listener after listening', async () => {
+  const { server, close } = await startMcpServer({ fleetApi: createMockFleetApi(), port: 0 });
+  try {
+    assert.equal(server.listenerCount('error'), 0);
+  } finally {
+    await close();
+  }
 });
 
 test('advertises exactly the registry tools, with schemas and annotations', async () => {
