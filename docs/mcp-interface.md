@@ -106,11 +106,12 @@ The included authentication function is a pass-through development stub. Replace
 injecting middleware through `createMcpHttpApp({ authenticate })`; do not edit the
 workflow or registry to add HTTP authentication.
 
-The provided launcher binds to `127.0.0.1` by default. A VM or container deployment
-needs an explicit bind address, such as `0.0.0.0`, plus bearer-token authentication:
-build the middleware with `requireBearerAuth` from `@modelcontextprotocol/express`,
-inject it as `authenticate`, and configure its token verifier. Do not expose the
-pass-through stub on a non-loopback interface.
+The provided launcher binds to `127.0.0.1` by default. Set `MCP_BIND_HOST=0.0.0.0` for
+Docker or VM deployments (the docker-compose file does this automatically). A
+network-accessible deployment also needs bearer-token authentication: build the
+middleware with `requireBearerAuth` from `@modelcontextprotocol/express`, inject it as
+`authenticate`, and configure its token verifier. Do not expose the pass-through stub on
+a non-loopback interface.
 
 Give the matching token to Claude Code when registering the remote endpoint:
 

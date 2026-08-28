@@ -183,20 +183,61 @@ commits.
 
 ## Docker
 
-Useful for a clean-room check. The image installs Fleet itself and bind-mounts the repo
-at `/workspace`; your host `~/.apra-fleet` is not used, and secrets are excluded via
-`.dockerignore`.
+Build once, run, done. The image installs Fleet, Claude Code, and project dependencies.
+The entrypoint handles everything — deps, Fleet startup, member provisioning — so users
+only need to write workflows and tools.
+
+### Quick start
 
 ```bash
-docker compose run --rm fleet node --test tests/boilerplate.test.mjs   # mock
-docker compose run --rm fleet                                          # live, token from .token
-docker compose run --rm -e CLAUDE_CODE_OAUTH_TOKEN="$CLAUDE_CODE_OAUTH_TOKEN" fleet
+docker compose up                    # starts Fleet + MCP server on port 3000
 ```
 
-The entrypoint starts Fleet, waits up to 60 seconds for `apra-fleet status` to succeed,
-then provisions members — unless `--test` appears in the arguments, which skips
-provisioning entirely. Note the image does not install Claude Code, so live `agent()`
-calls inside the container still need an LLM CLI present.
+Then register the MCP server with Claude Code from the host:
+
+```bash
+claude mcp add --transport http fleet http://127.0.0.1:3000/mcp
+```
+
+Pass an OAuth token for live `agent()` calls:
+
+```bash
+# Option A: .token file (gitignored, bind-mounted)
+claude setup-token > .token
+docker compose up
+
+# Option B: environment variable
+CLAUDE_CODE_OAUTH_TOKEN="..." docker compose up
+```
+
+Override the host port with `MCP_PORT`:
+
+```bash
+MCP_PORT=4000 docker compose up
+```
+
+### Running workflows or tests directly
+
+```bash
+docker compose run --rm fleet node workflows/boilerplate/main.mjs      # live workflow
+docker compose run --rm fleet node --test tests/boilerplate.test.mjs   # mock tests
+```
+
+Passing `--test` skips Fleet startup and member provisioning.
+
+### How it works
+
+The entrypoint runs automatically on every container start:
+
+1. Installs project deps if the named volume is empty (first run)
+2. Symlinks `@apralabs` packages so workflows resolve them
+3. Starts Fleet and waits up to 60 seconds for it to be ready
+4. Provisions members and attaches the OAuth token
+
+The compose file sets `MCP_BIND_HOST=0.0.0.0` so the MCP server is reachable from the
+host. The default bind address remains `127.0.0.1` for local development outside Docker.
+A named volume for `node_modules` prevents the host bind mount from overwriting
+Linux-native dependencies.
 
 ## Troubleshooting
 

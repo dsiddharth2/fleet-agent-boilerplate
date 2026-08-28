@@ -1,10 +1,17 @@
 services:
   fleet:
     build: .
-    working_dir: /workspace
+    ports:
+      - "${MCP_PORT:-3000}:3000"
     volumes:
       - .:/workspace
-    # Live runs: entrypoint starts Fleet, registers members, then
-    # apra-fleet auth from CLAUDE_CODE_OAUTH_TOKEN or .token
+      - node_modules:/workspace/node_modules
     environment:
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      MCP_BIND_HOST: "0.0.0.0"
+    # Default: starts Fleet + MCP server. Override for anything else:
+    #   docker compose run --rm fleet node workflows/boilerplate/main.mjs
+    #   docker compose run --rm fleet node --test tests/boilerplate.test.mjs
+
+volumes:
+  node_modules:
