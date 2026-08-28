@@ -7,11 +7,19 @@ A batteries-included starter for building agents with [Apra Fleet](https://githu
 ```bash
 git clone https://github.com/dsiddharth2/fleet-agent-boilerplate.git
 cd fleet-agent-boilerplate
+```
 
-# Provide an OAuth token for live agent() calls:
-export CLAUDE_CODE_OAUTH_TOKEN="your-token"
+Set the OAuth token and start the container in the background:
 
-docker compose up
+**Bash / macOS / Linux:**
+```bash
+CLAUDE_CODE_OAUTH_TOKEN="your-token" docker compose up -d
+```
+
+**PowerShell (Windows):**
+```powershell
+$env:CLAUDE_CODE_OAUTH_TOKEN = "your-token"
+docker compose up -d
 ```
 
 That's it. The MCP server is now listening on `http://localhost:3000/mcp`. Register it with Claude Code:
@@ -203,14 +211,44 @@ Four ideas explain most of the code:
 
 ---
 
-## Secrets
+## Setting up the OAuth token
 
-| Where | Purpose |
-|---|---|
-| `CLAUDE_CODE_OAUTH_TOKEN` env | Passed at startup, written into Fleet's credential store |
-| Fleet credential store | Where the token lives at runtime — Fleet spawns Claude, not your process |
+The OAuth token goes directly into Fleet's credential store — no files saved to disk.
+Fleet spawns Claude (not your Node process), so the token must live in Fleet's store.
 
-The OAuth token goes directly into Fleet's credential store on the member at startup. The Fleet server spawns Claude — not your Node process — so the token must live in Fleet's store, not your shell environment. The entrypoint and provision script handle this automatically via `apra-fleet auth`.
+### Local development
+
+```bash
+apra-fleet auth --oauth --member BOILERPLATE-DOER "$(claude setup-token)"
+```
+
+`claude setup-token` opens a browser login and outputs the token. `apra-fleet auth`
+writes it straight into Fleet's credential store on the member.
+
+### Docker / VM
+
+**Bash / macOS / Linux:**
+```bash
+CLAUDE_CODE_OAUTH_TOKEN="your-token" docker compose up -d
+```
+
+**PowerShell (Windows):**
+```powershell
+$env:CLAUDE_CODE_OAUTH_TOKEN = "your-token"
+docker compose up -d
+```
+
+The provision script picks up the env var and runs `apra-fleet auth` inside the
+container automatically. The `-d` flag runs the container in the background.
+
+### CI (GitHub Actions, Azure Pipelines, etc.)
+
+1. Run `claude setup-token` locally and copy the output
+2. Store it as a secret in your CI provider (e.g. GitHub Secrets → `CLAUDE_CODE_OAUTH_TOKEN`)
+3. Pass it as an environment variable when starting the container
+
+The token never enters the Docker image — it is injected at runtime and stored only
+in Fleet's in-memory credential store.
 
 ---
 
