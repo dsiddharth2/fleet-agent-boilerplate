@@ -4,22 +4,22 @@ set -eu
 # Same commands as a host provision. Docker entrypoint runs this after `apra-fleet start`.
 # Token comes from CLAUDE_CODE_OAUTH_TOKEN and goes straight into Fleet's credential store.
 
-STATUS=$(apra-fleet status 2>/dev/null || true)
+REGISTRY="${HOME}/.apra-fleet/data/registry.json"
 
-register_if_absent() {
+ensure_member() {
   name="$1"
   work_path="$2"
-  if echo "$STATUS" | grep -q "$name"; then
+  if [ -f "$REGISTRY" ] && grep -q "\"$name\"" "$REGISTRY"; then
     echo "✓ $name already registered; skipping."
-  else
-    apra-fleet register-member --type local --llm claude \
-      --name "$name" \
-      --path "$work_path"
+    return 0
   fi
+  apra-fleet register-member --type local --llm claude \
+    --name "$name" \
+    --path "$work_path"
 }
 
-register_if_absent DEMO-DOER "$(pwd)/workdir/DEMO-DOER"
-register_if_absent DEMO-REVIEWER "$(pwd)/workdir/DEMO-REVIEWER"
+ensure_member DEMO-DOER "$(pwd)/workdir/DEMO-DOER"
+ensure_member DEMO-REVIEWER "$(pwd)/workdir/DEMO-REVIEWER"
 
 if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
   apra-fleet auth --oauth --member DEMO-DOER "$CLAUDE_CODE_OAUTH_TOKEN"
