@@ -1,12 +1,12 @@
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { ensureApralabs } from '../workflows/boilerplate/ensure-apralabs.mjs';
+import { ensureApralabs } from '../workflows/demo/ensure-apralabs.mjs';
 import { createMcpHttpApp } from './http.mjs';
 import { buildMcpServer } from './server.mjs';
 
 export async function startMcpServer({ fleetApi, port } = {}) {
   // Attach to `apra-fleet start` (where members + OAuth were provisioned) —
-  // same reasoning as workflows/boilerplate/main.mjs.
+  // same reasoning as workflows/demo/main.mjs.
   if (!process.env.APRA_FLEET_TRANSPORT) {
     process.env.APRA_FLEET_TRANSPORT = 'http';
   }
@@ -33,9 +33,10 @@ export async function startMcpServer({ fleetApi, port } = {}) {
   const listenPort = port ?? Number(process.env.PORT ?? 3000);
   // Bind loopback by default. Hosting this on a VM needs an explicit bind
   // address AND real authentication — see docs/mcp-interface.md.
+  const bindHost = process.env.MCP_BIND_HOST || '127.0.0.1';
   let server;
   try {
-    server = app.listen(listenPort, '127.0.0.1');
+    server = app.listen(listenPort, bindHost);
     await new Promise((resolve, reject) => {
       const onListening = () => {
         server.off('error', onError);
@@ -63,7 +64,7 @@ export async function startMcpServer({ fleetApi, port } = {}) {
     }
     throw err;
   }
-  console.log(`MCP server listening on http://127.0.0.1:${server.address().port}/mcp`);
+  console.log(`MCP server listening on http://${bindHost}:${server.address().port}/mcp`);
 
   const close = async () => {
     await new Promise((resolve) => server.close(resolve));

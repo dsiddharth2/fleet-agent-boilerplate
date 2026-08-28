@@ -14,10 +14,10 @@ It is deliberately **not** a Fleet CLI workflow. Nothing here is meant to be reg
 with `apra-fleet workflow …`. The entry point is an ordinary exported async function:
 
 ```js
-import { runBoilerplate } from './workflows/boilerplate/main.mjs';
+import { runDemo } from './workflows/demo/main.mjs';
 
-await runBoilerplate();               // live — connects to a running Fleet server
-await runBoilerplate({ fleetApi });   // tests — inject a mock client
+await runDemo();               // live — connects to a running Fleet server
+await runDemo({ fleetApi });   // tests — inject a mock client
 ```
 
 That single design choice drives most of what follows: because the workflow is a plain
@@ -44,11 +44,11 @@ shared helper rather than inline property access.
 **Member.** A named agent workspace registered with the server: a name, a type
 (`local` or `remote`), an LLM (`claude`), and a working folder on disk. Fleet runs
 commands and prompts *as* a member, inside that member's folder. This repo registers
-two: `BOILERPLATE-DOER` and `BOILERPLATE-REVIEWER`.
+two: `DEMO-DOER` and `DEMO-REVIEWER`.
 
 **Work folder.** The directory a member operates in. Each member needs its **own**
-folder — two local members sharing a `cwd` collide. Hence `workdir/BOILERPLATE-DOER/`
-and `workdir/BOILERPLATE-REVIEWER/`, each holding only a `.gitkeep`. Fleet may drop a
+folder — two local members sharing a `cwd` collide. Hence `workdir/DEMO-DOER/`
+and `workdir/DEMO-REVIEWER/`, each holding only a `.gitkeep`. Fleet may drop a
 `.claude/settings.local.json` into them at registration time; that is local machine
 state and is gitignored.
 
@@ -69,7 +69,7 @@ unattended" problem traces back to this.
 │     │              one tool per registry entry               │
 │     │ entry.run({ fleetApi, args, signal, reportPhase })     │
 │     ▼                                                       │
-│   workflows/       runBoilerplate() — connect + execute      │
+│   workflows/       runDemo() — connect + execute              │
 │     │              inspect-members — read-only inspection    │
 └─────┼───────────────────────────────────────────────────────┘
       │ connectFleet() — MCP over HTTP
@@ -77,8 +77,8 @@ unattended" problem traces back to this.
 ┌─────────────────────────────────────────────────────────────┐
 │  Fleet server        http://127.0.0.1:7523/mcp              │
 │                                                             │
-│   BOILERPLATE-DOER              BOILERPLATE-REVIEWER        │
-│   workdir/BOILERPLATE-DOER/     workdir/BOILERPLATE-REVIEWER/│
+│   DEMO-DOER              DEMO-REVIEWER        │
+│   workdir/DEMO-DOER/     workdir/DEMO-REVIEWER/│
 │   Claude Code + OAuth           registered, idle in the demo │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -89,23 +89,23 @@ stateless front door over it.
 
 ## Module map
 
-### `workflows/boilerplate/`
+### `workflows/demo/`
 
 | File | Responsibility |
 |---|---|
-| `main.mjs` | The launcher. Connects to Fleet, runs the engine, cleans up the transport. Exports `runBoilerplate()`; self-executes when run directly. |
-| `boilerplate.js` | The workflow body. Receives an engine `context` and does the actual work. Contains no connection logic. |
+| `main.mjs` | The launcher. Connects to Fleet, runs the engine, cleans up the transport. Exports `runDemo()`; self-executes when run directly. |
+| `demo.js` | The workflow body. Receives an engine `context` and does the actual work. Contains no connection logic. |
 | `dummy.py` | Stand-in for real Python work. Prints `hello-from-python`. |
 | `ensure-apralabs.mjs` | Symlinks `node_modules/@apralabs` to the Fleet install so the packages resolve. |
 | `workflow.json` | Metadata only. Not consumed by anything in this repo. |
 
 The **launcher / body split** is the most important convention here. `main.mjs` owns
 everything environmental — transport selection, `connectFleet()`, error framing, cleanup
-in a `finally` — while `boilerplate.js` only knows how to do the work, given a context.
+in a `finally` — while `demo.js` only knows how to do the work, given a context.
 Keep that separation when you add workflows: it is what makes the body testable and the
 launcher reusable.
 
-`boilerplate.js` runs five phases, each demonstrating a primitive you would reuse:
+`demo.js` runs five phases, each demonstrating a primitive you would reuse:
 
 1. **register** — `ensureMember()` for both members, idempotently.
 2. **status** — `fleetStatus()`, confirming both members are present.
@@ -140,12 +140,12 @@ Full interface reference lives in [mcp-interface.md](mcp-interface.md).
 ### A workflow run
 
 ```text
-runBoilerplate()
+runDemo()
   ├─ default APRA_FLEET_TRANSPORT to 'http'
   ├─ ensureApralabs()                       symlink @apralabs packages
   ├─ connectFleet({ env })                  → { fleetApi, transport }   (skipped if injected)
   ├─ new WorkflowEngine(new FleetWorkflow(api))
-  ├─ engine.executeFile('boilerplate.js', { fleetApi })
+  ├─ engine.executeFile('demo.js', { fleetApi })
   │    register → status → command → transform → agent
   └─ finally: transport?.stop()
 ```
@@ -224,8 +224,8 @@ The MCP layer holds no state: every HTTP request gets a fresh MCP server and tra
 |---|---|
 | Real Python work | Replace `dummy.py`, keep the `command()` call |
 | Real LLM work | Change the `agent()` prompt, keep `member_name` |
-| A second agent | Dispatch `agent({ member_name: 'BOILERPLATE-REVIEWER' })`; register and auth it the same way |
-| Your own member names | Rename the constants in `boilerplate.js`, the `workdir/` folders, and `scripts/provision-members.sh` |
+| A second agent | Dispatch `agent({ member_name: 'DEMO-REVIEWER' })`; register and auth it the same way |
+| Your own member names | Rename the constants in `demo.js`, the `workdir/` folders, and `scripts/provision-members.sh` |
 | A new MCP tool | Append its entry to `mcp/registry.mjs` — no server or HTTP changes |
 | Real authentication | Pass middleware to `createMcpHttpApp({ authenticate })` |
 

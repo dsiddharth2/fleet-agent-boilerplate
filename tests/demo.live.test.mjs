@@ -2,7 +2,7 @@ import './setup-fleet-modules.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { runBoilerplate } = await import('../workflows/boilerplate/main.mjs');
+const { runDemo } = await import('../workflows/demo/main.mjs');
 
 function asText(value) {
   if (value == null) return '';
@@ -17,12 +17,12 @@ function asText(value) {
 }
 
 test(
-  'live runBoilerplate runs python command and agent on BOILERPLATE-DOER',
+  'live runDemo runs python command and agent on DEMO-DOER',
   { timeout: 180_000 },
   async () => {
-    const result = await runBoilerplate();
+    const result = await runDemo();
 
-    assert.equal(typeof result, 'object', 'runBoilerplate() should return the dummy phase results');
+    assert.equal(typeof result, 'object', 'runDemo() should return the dummy phase results');
     assert.match(asText(result.command), /hello-from-python/);
     assert.deepEqual(result.transform, { ok: true, source: 'transform' });
     assert.match(asText(result.agent), /\bpong\b/i);

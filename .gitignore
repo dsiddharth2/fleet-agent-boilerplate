@@ -4,7 +4,6 @@
 .fleet-src/
 node_modules/
 .env
-.token
 .claude/
 .cursor/
 .superpowers/

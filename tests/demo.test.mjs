@@ -4,11 +4,11 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const { runBoilerplate } = await import('../workflows/boilerplate/main.mjs');
+const { runDemo } = await import('../workflows/demo/main.mjs');
 
 const dummyPy = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
-  '../workflows/boilerplate/dummy.py',
+  '../workflows/demo/dummy.py',
 );
 
 function createMockFleetApi() {
@@ -47,23 +47,23 @@ function createMockFleetApi() {
   };
 }
 
-test('runBoilerplate registers members, runs python command, and smokes agent', async () => {
+test('runDemo registers members, runs python command, and smokes agent', async () => {
   const fleetApi = createMockFleetApi();
 
-  const result = await runBoilerplate({ fleetApi });
+  const result = await runDemo({ fleetApi });
   assert.match(String(result.command?.output ?? result.command), /hello-from-python/);
   assert.deepEqual(result.transform, { ok: true, source: 'transform' });
   assert.match(String(result.agent?.response ?? result.agent), /\bpong\b/i);
 
   const registeredNames = fleetApi.registerCalls.map((call) => call.friendly_name);
-  assert.ok(registeredNames.includes('BOILERPLATE-DOER'), 'BOILERPLATE-DOER should be registered');
-  assert.ok(registeredNames.includes('BOILERPLATE-REVIEWER'), 'BOILERPLATE-REVIEWER should be registered');
+  assert.ok(registeredNames.includes('DEMO-DOER'), 'DEMO-DOER should be registered');
+  assert.ok(registeredNames.includes('DEMO-REVIEWER'), 'DEMO-REVIEWER should be registered');
 
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-  const doerCall = fleetApi.registerCalls.find((call) => call.friendly_name === 'BOILERPLATE-DOER');
-  const reviewerCall = fleetApi.registerCalls.find((call) => call.friendly_name === 'BOILERPLATE-REVIEWER');
-  assert.equal(doerCall.work_folder, path.join(repoRoot, 'workdir', 'BOILERPLATE-DOER'));
-  assert.equal(reviewerCall.work_folder, path.join(repoRoot, 'workdir', 'BOILERPLATE-REVIEWER'));
+  const doerCall = fleetApi.registerCalls.find((call) => call.friendly_name === 'DEMO-DOER');
+  const reviewerCall = fleetApi.registerCalls.find((call) => call.friendly_name === 'DEMO-REVIEWER');
+  assert.equal(doerCall.work_folder, path.join(repoRoot, 'workdir', 'DEMO-DOER'));
+  assert.equal(reviewerCall.work_folder, path.join(repoRoot, 'workdir', 'DEMO-REVIEWER'));
 
   assert.equal(fleetApi.commandCalls.length, 1);
   const command = fleetApi.commandCalls[0].command;
@@ -76,7 +76,7 @@ test('runBoilerplate registers members, runs python command, and smokes agent', 
   assert.ok(fleetApi.promptCalls.length >= 1, 'executePrompt should be invoked');
 
   const registerCount = fleetApi.registerCalls.length;
-  await runBoilerplate({ fleetApi });
+  await runDemo({ fleetApi });
   assert.equal(
     fleetApi.registerCalls.length,
     registerCount,
@@ -89,7 +89,7 @@ test('an aborted signal prevents the agent phase from spending tokens', async ()
   const controller = new AbortController();
   controller.abort();
 
-  const result = await runBoilerplate({ fleetApi, signal: controller.signal });
+  const result = await runDemo({ fleetApi, signal: controller.signal });
   assert.equal(result.cancelled, true);
   assert.equal(fleetApi.promptCalls.length, 0, 'executePrompt must not run after abort');
 });
@@ -98,7 +98,7 @@ test('aborting on the final progress notification prevents the agent call', asyn
   const fleetApi = createMockFleetApi();
   const controller = new AbortController();
 
-  const result = await runBoilerplate({
+  const result = await runDemo({
     fleetApi,
     signal: controller.signal,
     reportPhase(message) {
@@ -112,12 +112,12 @@ test('aborting on the final progress notification prevents the agent call', asyn
 
 test('reportPhase receives one message per phase and is optional', async () => {
   const phases = [];
-  await runBoilerplate({
+  await runDemo({
     fleetApi: createMockFleetApi(),
     reportPhase: (message) => phases.push(message),
   });
   assert.ok(phases.length >= 5, `expected a message per phase, got ${phases.length}`);
 
   // Omitting reportPhase must not throw.
-  await runBoilerplate({ fleetApi: createMockFleetApi() });
+  await runDemo({ fleetApi: createMockFleetApi() });
 });

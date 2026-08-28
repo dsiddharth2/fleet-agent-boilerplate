@@ -2,7 +2,7 @@
 """Report on one member work folder. Prints a single JSON object on stdout.
 
 Run standalone as a smoke test:
-    python3 workflows/inspect-members/inspect.py --root workdir/BOILERPLATE-DOER --files
+    python3 workflows/inspect-members/inspect.py --root workdir/DEMO-DOER --files
 """
 import argparse
 import json

@@ -43,7 +43,7 @@ export function ensureApralabs() {
   const src = findApralabsSource();
   if (!src) {
     throw new Error(
-      'Cannot resolve @apralabs/apra-fleet-workflow. Install Fleet (see README) or run: docker compose run --rm fleet node --test tests/boilerplate.test.mjs',
+      'Cannot resolve @apralabs/apra-fleet-workflow. Install Fleet (see README) or run: docker compose run --rm fleet node --test tests/demo.test.mjs',
     );
   }
 
