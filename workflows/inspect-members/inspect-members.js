@@ -3,8 +3,8 @@ import { fileURLToPath } from 'node:url';
 
 export const meta = { name: 'inspect-members' };
 
-const DOER = 'BOILERPLATE-DOER';
-const REVIEWER = 'BOILERPLATE-REVIEWER';
+const DOER = 'DEMO-DOER';
+const REVIEWER = 'DEMO-REVIEWER';
 
 // Default to the members this repo owns. A shared Fleet server may host other
 // projects' members, and reporting on those would leak unrelated information.

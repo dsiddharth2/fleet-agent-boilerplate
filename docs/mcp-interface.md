@@ -29,13 +29,13 @@ default.
 
 | Tool | Arguments | Behavior |
 |---|---|---|
-| `boilerplate` | None | Runs the complete demo, including the agent smoke test. It spends LLM tokens and is not read-only. |
+| `demo` | None | Runs the complete demo, including the agent smoke test. It spends LLM tokens and is not read-only. |
 | `inspect-members` | `members`, `includeFiles` | Reports member registration and work-folder information. It is read-only and spends no LLM tokens. |
 
 `inspect-members` accepts:
 
-- `members`: optional array of member names. It defaults to `BOILERPLATE-DOER` and
-  `BOILERPLATE-REVIEWER`.
+- `members`: optional array of member names. It defaults to `DEMO-DOER` and
+  `DEMO-REVIEWER`.
 - `includeFiles`: optional boolean. When true, include a capped top-level directory
   listing for each member.
 
@@ -133,6 +133,6 @@ tokens. `MAX_MCP_OUTPUT_TOKENS` controls the truncation limit. Independently,
 | Symptom | Fix |
 |---|---|
 | `connectFleet() failed` | Start Fleet with `apra-fleet start`, then restart the MCP server. |
-| `OAuth session expired` | Re-authenticate `BOILERPLATE-DOER` in Fleet's credential store. |
+| `OAuth session expired` | Re-authenticate `DEMO-DOER` in Fleet's credential store. |
 | A tool is not chosen | Improve its `description` in `mcp/registry.mjs` so the model knows when to use it. |
 | A tool call times out | Set `"timeout"` in that server's `.mcp.json` entry; use `600000` for a ten-minute allowance. |

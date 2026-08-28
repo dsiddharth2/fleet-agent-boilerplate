@@ -11,7 +11,7 @@ fi
 
 # Symlink @apralabs packages so workflows can resolve them.
 echo "[entrypoint] linking @apralabs packages..."
-node -e "import('./workflows/boilerplate/ensure-apralabs.mjs').then(m => m.ensureApralabs())" 2>/dev/null || true
+node -e "import('./workflows/demo/ensure-apralabs.mjs').then(m => m.ensureApralabs())" 2>/dev/null || true
 
 skip_provision=0
 for arg in "$@"; do
@@ -22,7 +22,7 @@ for arg in "$@"; do
 done
 
 if [ "$skip_provision" -eq 0 ]; then
-  mkdir -p /workspace/workdir/BOILERPLATE-DOER /workspace/workdir/BOILERPLATE-REVIEWER
+  mkdir -p /workspace/workdir/DEMO-DOER /workspace/workdir/DEMO-REVIEWER
 
   echo "[entrypoint] starting Fleet server..."
   apra-fleet start

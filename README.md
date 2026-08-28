@@ -1,12 +1,12 @@
-# fleet-agent-boilerplate
+# workflow-kit
 
-A batteries-included starter for building agents with [Apra Fleet](https://github.com/Apra-Labs/apra-fleet). Clone it, write your workflows and tools, `docker compose up`. Everything else — Fleet server, member registration, dependency installation, MCP server — is handled for you.
+A workflow kit from [Apra Fleet](https://github.com/Apra-Labs/apra-fleet). Clone it, write your workflows and tools, `docker compose up`. Everything else — Fleet server, member registration, dependency installation, MCP server — is handled for you.
 
 ## Quick start
 
 ```bash
-git clone https://github.com/dsiddharth2/fleet-agent-boilerplate.git
-cd fleet-agent-boilerplate
+git clone https://github.com/dsiddharth2/workflow-kit.git
+cd workflow-kit
 ```
 
 Set the OAuth token and start the container in the background:
@@ -75,7 +75,7 @@ export async function main(context) {
 }
 ```
 
-The launcher owns connection and cleanup. Copy the pattern from `workflows/boilerplate/main.mjs`:
+The launcher owns connection and cleanup. Copy the pattern from `workflows/demo/main.mjs`:
 
 ```js
 // workflows/my-workflow/main.mjs
@@ -150,10 +150,10 @@ npm run mcp
 
 ```bash
 # Inside Docker
-docker compose run --rm fleet node workflows/boilerplate/main.mjs
+docker compose run --rm fleet node workflows/demo/main.mjs
 
 # On host
-node workflows/boilerplate/main.mjs
+node workflows/demo/main.mjs
 ```
 
 ---
@@ -164,7 +164,7 @@ Tests run without a Fleet server, without members, and without tokens:
 
 ```bash
 npm test                                                              # all mock tests
-docker compose run --rm fleet node --test tests/boilerplate.test.mjs  # in Docker
+docker compose run --rm fleet node --test tests/demo.test.mjs         # in Docker
 ```
 
 The mock tests inject a fake `fleetApi` and assert real behavior — member registration, command dispatch, agent calls. Write mock tests first when adding workflows.
@@ -172,8 +172,8 @@ The mock tests inject a fake `fleetApi` and assert real behavior — member regi
 Live tests need a running Fleet server and a token:
 
 ```bash
-node --test tests/boilerplate.live.test.mjs   # full workflow with real LLM
-node --test tests/mcp.live.test.mjs           # MCP server against live Fleet
+node --test tests/demo.live.test.mjs        # full workflow with real LLM
+node --test tests/mcp.live.test.mjs         # MCP server against live Fleet
 ```
 
 ---
@@ -188,7 +188,7 @@ node --test tests/mcp.live.test.mjs           # MCP server against live Fleet
 │     │              entry. Claude chooses from descriptions.  │
 │     │ entry.run({ fleetApi, args, signal, reportPhase })    │
 │     ▼                                                       │
-│   workflows/       runBoilerplate() — connect + execute      │
+│   workflows/       runDemo() — connect + execute             │
 │     │              Your workflow bodies live here.           │
 └─────┼───────────────────────────────────────────────────────┘
       │ MCP over HTTP
@@ -219,7 +219,7 @@ Fleet spawns Claude (not your Node process), so the token must live in Fleet's s
 ### Local development
 
 ```bash
-apra-fleet auth --oauth --member BOILERPLATE-DOER "$(claude setup-token)"
+apra-fleet auth --oauth --member DEMO-DOER "$(claude setup-token)"
 ```
 
 `claude setup-token` opens a browser login and outputs the token. `apra-fleet auth`
@@ -272,9 +272,9 @@ MCP_PORT=4000 docker compose up
 
 ```text
 workflows/
-  boilerplate/          # demo workflow — replace with your own
+  demo/                 # demo workflow — replace with your own
     main.mjs            # launcher: connectFleet, execute, exit
-    boilerplate.js      # body: register, status, command, transform, agent
+    demo.js             # body: register, status, command, transform, agent
     dummy.py            # stand-in for real Python work
     ensure-apralabs.mjs # symlinks @apralabs packages from Fleet install
   inspect-members/      # read-only member inspection workflow

@@ -2,10 +2,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const meta = { name: 'boilerplate' };
+export const meta = { name: 'demo' };
 
-const DOER = 'BOILERPLATE-DOER';
-const REVIEWER = 'BOILERPLATE-REVIEWER';
+const DOER = 'DEMO-DOER';
+const REVIEWER = 'DEMO-REVIEWER';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '../..');
 const DUMMY_PY = fileURLToPath(new URL('./dummy.py', import.meta.url));
@@ -60,7 +60,7 @@ export async function main(context) {
   const { phase, command, transform, agent, log, args } = context;
   const fleetApi = args.fleetApi;
   if (!fleetApi) {
-    throw new Error('boilerplate.js requires args.fleetApi');
+    throw new Error('demo.js requires args.fleetApi');
   }
   const signal = args.signal;
   const reportPhase = args.reportPhase ?? (() => {});
@@ -69,7 +69,7 @@ export async function main(context) {
   // is the one that matters, because that is the phase that spends tokens.
   const cancelled = () => signal?.aborted === true;
 
-  phase('register BOILERPLATE-DOER and BOILERPLATE-REVIEWER');
+  phase('register DEMO-DOER and DEMO-REVIEWER');
   await reportPhase('registering members');
   await ensureMember(fleetApi, DOER, DOER_WORK, log);
   await ensureMember(fleetApi, REVIEWER, REVIEWER_WORK, log);

@@ -3,11 +3,11 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { ensureApralabs } from './ensure-apralabs.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const engineScript = path.join(here, 'boilerplate.js');
+const engineScript = path.join(here, 'demo.js');
 
 export const selfExecuting = true;
 
-export async function runBoilerplate({ fleetApi, signal, reportPhase } = {}) {
+export async function runDemo({ fleetApi, signal, reportPhase } = {}) {
   // Attach to `apra-fleet start` (where members + OAuth were provisioned).
   // Unset transport would fall back to stdio spawn, which cannot find the
   // npm-global server layout and would also miss those members.
@@ -51,7 +51,7 @@ function isMainModule() {
 
 if (isMainModule()) {
   try {
-    await runBoilerplate();
+    await runDemo();
     process.exit(0);
   } catch (err) {
     console.error(err?.message ?? err);

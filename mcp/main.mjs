@@ -1,12 +1,12 @@
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { ensureApralabs } from '../workflows/boilerplate/ensure-apralabs.mjs';
+import { ensureApralabs } from '../workflows/demo/ensure-apralabs.mjs';
 import { createMcpHttpApp } from './http.mjs';
 import { buildMcpServer } from './server.mjs';
 
 export async function startMcpServer({ fleetApi, port } = {}) {
   // Attach to `apra-fleet start` (where members + OAuth were provisioned) —
-  // same reasoning as workflows/boilerplate/main.mjs.
+  // same reasoning as workflows/demo/main.mjs.
   if (!process.env.APRA_FLEET_TRANSPORT) {
     process.env.APRA_FLEET_TRANSPORT = 'http';
   }

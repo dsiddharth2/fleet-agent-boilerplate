@@ -4,9 +4,9 @@ import assert from 'node:assert/strict';
 
 const { runInspectMembers } = await import('../workflows/inspect-members/main.mjs');
 
-// Mirrors the mock shape in tests/boilerplate.test.mjs: realistic MCP envelopes
+// Mirrors the mock shape in tests/demo.test.mjs: realistic MCP envelopes
 // so the text-extraction paths are exercised rather than bypassed.
-function createMockFleetApi({ present = ['BOILERPLATE-DOER', 'BOILERPLATE-REVIEWER'], commandFails = false } = {}) {
+function createMockFleetApi({ present = ['DEMO-DOER', 'DEMO-REVIEWER'], commandFails = false } = {}) {
   const commandCalls = [];
   return {
     commandCalls,
@@ -37,21 +37,21 @@ test('inspects both known members by default', async () => {
   assert.equal(typeof result.generatedAt, 'string');
   assert.deepEqual(
     result.members.map((entry) => entry.name),
-    ['BOILERPLATE-DOER', 'BOILERPLATE-REVIEWER'],
+    ['DEMO-DOER', 'DEMO-REVIEWER'],
   );
   assert.equal(result.members[0].present, true);
   assert.equal(result.members[0].report.fileCount, 2);
   assert.equal(fleetApi.commandCalls.length, 2);
   assert.match(fleetApi.commandCalls[0].command, /inspect\.py/);
-  assert.equal(fleetApi.commandCalls[0].member_name, 'BOILERPLATE-DOER');
+  assert.equal(fleetApi.commandCalls[0].member_name, 'DEMO-DOER');
   assert.equal(fleetApi.commandCalls[0].failSoft, true);
 });
 
 test('honors an explicit members list', async () => {
   const fleetApi = createMockFleetApi();
-  const result = await runInspectMembers({ fleetApi, members: ['BOILERPLATE-DOER'] });
+  const result = await runInspectMembers({ fleetApi, members: ['DEMO-DOER'] });
 
-  assert.deepEqual(result.members.map((entry) => entry.name), ['BOILERPLATE-DOER']);
+  assert.deepEqual(result.members.map((entry) => entry.name), ['DEMO-DOER']);
   assert.equal(fleetApi.commandCalls.length, 1);
 });
 
@@ -67,10 +67,10 @@ test('rejects member names outside this repo before command dispatch', async () 
 });
 
 test('reports an unregistered member as absent without running a command', async () => {
-  const fleetApi = createMockFleetApi({ present: ['BOILERPLATE-DOER'] });
+  const fleetApi = createMockFleetApi({ present: ['DEMO-DOER'] });
   const result = await runInspectMembers({ fleetApi });
 
-  const reviewer = result.members.find((entry) => entry.name === 'BOILERPLATE-REVIEWER');
+  const reviewer = result.members.find((entry) => entry.name === 'DEMO-REVIEWER');
   assert.equal(reviewer.present, false);
   assert.equal(reviewer.report, undefined);
   assert.equal(fleetApi.commandCalls.length, 1, 'absent members must not be probed');

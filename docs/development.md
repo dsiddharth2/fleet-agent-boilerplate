@@ -35,13 +35,13 @@ Live runs need both members registered and an OAuth token attached to the doer.
 
 ```bash
 apra-fleet register-member --type local --llm claude \
-  --name BOILERPLATE-DOER --path "$(pwd)/workdir/BOILERPLATE-DOER"
+  --name DEMO-DOER --path "$(pwd)/workdir/DEMO-DOER"
 
 apra-fleet register-member --type local --llm claude \
-  --name BOILERPLATE-REVIEWER --path "$(pwd)/workdir/BOILERPLATE-REVIEWER"
+  --name DEMO-REVIEWER --path "$(pwd)/workdir/DEMO-REVIEWER"
 
 # Set the token directly in Fleet's credential store:
-apra-fleet auth --oauth --member BOILERPLATE-DOER "$(claude setup-token)"
+apra-fleet auth --oauth --member DEMO-DOER "$(claude setup-token)"
 ```
 
 Three things bite people here. `--type local` is required — the default is remote and
@@ -55,15 +55,15 @@ by your process. Re-run the `auth` command when you see `OAuth session expired`.
 | Command | Needs a server? | Needs a token? |
 |---|---|---|
 | `npm test` | no | no |
-| `node --test tests/boilerplate.test.mjs` | no | no |
+| `node --test tests/demo.test.mjs` | no | no |
 | `node --test tests/inspect-members.test.mjs` | no | no |
 | `node --test tests/mcp.test.mjs` | no | no |
 | `node --test tests/mcp.live.test.mjs` | yes | no |
-| `node --test tests/boilerplate.live.test.mjs` | yes | yes |
-| `node workflows/boilerplate/main.mjs` | yes | yes |
-| `npm run mcp` | yes | only for `boilerplate` |
-| `python3 workflows/boilerplate/dummy.py` | no | no |
-| `python3 workflows/inspect-members/inspect.py --root workdir/BOILERPLATE-DOER` | no | no |
+| `node --test tests/demo.live.test.mjs` | yes | yes |
+| `node workflows/demo/main.mjs` | yes | yes |
+| `npm run mcp` | yes | only for `demo` |
+| `python3 workflows/demo/dummy.py` | no | no |
+| `python3 workflows/inspect-members/inspect.py --root workdir/DEMO-DOER`  | no | no |
 
 A successful live workflow run prints `agent result: pong` and **returns to the shell**
 with exit 0. If it prints `pong` and hangs, the transport was not stopped — check the
@@ -84,7 +84,7 @@ configuration.
 
 Tests split by what they need, and the split is the point.
 
-**Mock tests** (`tests/boilerplate.test.mjs`, `tests/inspect-members.test.mjs`) run
+**Mock tests** (`tests/demo.test.mjs`, `tests/inspect-members.test.mjs`) run
 anywhere — no Fleet server, no members, no tokens, no network. They work because the
 launchers accept an injected `fleetApi`.
 
@@ -97,10 +97,10 @@ uses (`registerMember`, `fleetStatus`, `executeCommand`, `executePrompt`) and re
 its calls. It returns realistic MCP envelopes — `content[]` plus `structuredContent` —
 so the text-extraction paths get exercised rather than bypassed. Because
 `fleetStatus()` is derived from what was registered, the mock can assert genuinely
-useful behavior, such as a second `runBoilerplate()` not re-registering members.
+useful behavior, such as a second `runDemo()` not re-registering members.
 
 **Live tests** split further. `tests/mcp.live.test.mjs` exercises the MCP server against
-a live Fleet without spending tokens. `tests/boilerplate.live.test.mjs` runs the full
+a live Fleet without spending tokens. `tests/demo.live.test.mjs` runs the full
 workflow against a real member with a real token, asserting `hello-from-python`, the
 transform payload, and `pong`. Run live tests before merging changes that touch the
 Fleet integration, not on every save.
@@ -116,7 +116,7 @@ leaked into a workflow body.
 
 Follow the existing shape rather than inventing a new one.
 
-**1. Create the launcher and body.** Copy the split from `workflows/boilerplate/`: a
+**1. Create the launcher and body.** Copy the split from `workflows/demo/`: a
 `main.mjs` that owns connection, transport cleanup and the exported entry function, and
 a body file that only knows how to do the work given the engine `context`. The entry
 function must accept `{ fleetApi }` so it stays testable.
@@ -156,7 +156,7 @@ choose the tool. A thrown `run` automatically becomes an MCP `isError` result.
 
 **4. Register new members if you need them.** Each gets its own folder under `workdir/`,
 and its own `register-member` call in `scripts/provision-members.sh`. Use unique names —
-a shared Fleet server may host other projects, and `BOILERPLATE-*` is only a dummy
+a shared Fleet server may host other projects, and `DEMO-*` is only a dummy
 prefix.
 
 ## Conventions
@@ -216,8 +216,8 @@ MCP_PORT=4000 docker compose up
 ### Running workflows or tests directly
 
 ```bash
-docker compose run --rm fleet node workflows/boilerplate/main.mjs      # live workflow
-docker compose run --rm fleet node --test tests/boilerplate.test.mjs   # mock tests
+docker compose run --rm fleet node workflows/demo/main.mjs      # live workflow
+docker compose run --rm fleet node --test tests/demo.test.mjs   # mock tests
 ```
 
 Passing `--test` skips Fleet startup and member provisioning.
@@ -244,7 +244,7 @@ Linux-native dependencies.
 | `Cannot find package 'undici'` | Stale `node_modules/@apralabs` symlink. `ensureApralabs()` checks `~/.apra-fleet/node_modules` first, then the npm global prefix; delete any leftover `.fleet-src`. |
 | `"host" is required for remote members` | Add `--type local` to `register-member`. |
 | `Member "…" not found` on `auth` | Register the member before authenticating it. |
-| `OAuth session expired` | `claude setup-token`, then re-run `apra-fleet auth --oauth --member BOILERPLATE-DOER …`. |
+| `OAuth session expired` | `claude setup-token`, then re-run `apra-fleet auth --oauth --member DEMO-DOER …`. |
 | Live run prints `pong` but never exits | Transport not stopped — check the launcher's `finally`. |
 | A tool is never chosen | Improve its registry `description` so the connected model knows when to use it. |
 | A tool call times out | Set `"timeout"` in that server's `.mcp.json` entry. |

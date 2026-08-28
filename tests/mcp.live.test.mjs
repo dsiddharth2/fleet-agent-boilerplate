@@ -16,7 +16,7 @@ test('inspect-members reports on live members over MCP', { timeout: 180000 }, as
     await client.connect(new StreamableHTTPClientTransport(url));
 
     const { tools } = await client.listTools();
-    assert.deepEqual(tools.map((tool) => tool.name).sort(), ['boilerplate', 'inspect-members']);
+    assert.deepEqual(tools.map((tool) => tool.name).sort(), ['demo', 'inspect-members']);
 
     const result = await client.callTool({ name: 'inspect-members', arguments: {} });
     assert.equal(result.isError, undefined, `tool call failed: ${result.content?.[0]?.text}`);
@@ -24,7 +24,7 @@ test('inspect-members reports on live members over MCP', { timeout: 180000 }, as
     const report = JSON.parse(result.content[0].text);
     assert.deepEqual(
       report.members.map((entry) => entry.name),
-      ['BOILERPLATE-DOER', 'BOILERPLATE-REVIEWER'],
+      ['DEMO-DOER', 'DEMO-REVIEWER'],
     );
     for (const member of report.members) {
       assert.equal(member.present, true, `${member.name} should be registered`);

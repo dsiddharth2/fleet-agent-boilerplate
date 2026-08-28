@@ -1,8 +1,8 @@
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-// Shared with the boilerplate workflow on purpose: duplicating the symlink
+// Shared with the demo workflow on purpose: duplicating the symlink
 // logic would mean two places to fix when the Fleet install layout changes.
-import { ensureApralabs } from '../boilerplate/ensure-apralabs.mjs';
+import { ensureApralabs } from '../demo/ensure-apralabs.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const engineScript = path.join(here, 'inspect-members.js');

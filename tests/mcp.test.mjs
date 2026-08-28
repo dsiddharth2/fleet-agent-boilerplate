@@ -24,7 +24,7 @@ function createMockFleetApi() {
     },
     async fleetStatus() {
       return {
-        content: [{ type: 'text', text: 'BOILERPLATE-DOER\nBOILERPLATE-REVIEWER' }],
+        content: [{ type: 'text', text: 'DEMO-DOER\nDEMO-REVIEWER' }],
       };
     },
     async executeCommand(options) {
@@ -114,27 +114,27 @@ test('startMcpServer removes its startup error listener after listening', async 
 test('advertises exactly the registry tools, with schemas and annotations', async () => {
   await withServer(undefined, async ({ client }) => {
     const { tools } = await client.listTools();
-    assert.deepEqual(tools.map((tool) => tool.name).sort(), ['boilerplate', 'inspect-members']);
+    assert.deepEqual(tools.map((tool) => tool.name).sort(), ['demo', 'inspect-members']);
 
     const inspect = tools.find((tool) => tool.name === 'inspect-members');
     assert.deepEqual(Object.keys(inspect.inputSchema.properties).sort(), ['includeFiles', 'members']);
     assert.deepEqual(inspect.inputSchema.properties.members.items.enum, [
-      'BOILERPLATE-DOER',
-      'BOILERPLATE-REVIEWER',
+      'DEMO-DOER',
+      'DEMO-REVIEWER',
     ]);
     assert.equal(inspect.annotations.readOnlyHint, true);
 
-    const boilerplate = tools.find((tool) => tool.name === 'boilerplate');
-    assert.deepEqual(boilerplate.inputSchema.properties ?? {}, {});
-    assert.equal(boilerplate.annotations.readOnlyHint, false);
+    const demo = tools.find((tool) => tool.name === 'demo');
+    assert.deepEqual(demo.inputSchema.properties ?? {}, {});
+    assert.equal(demo.annotations.readOnlyHint, false);
   });
 });
 
-test('calling boilerplate runs the workflow', async () => {
+test('calling demo runs the workflow', async () => {
   await withServer(undefined, async ({ client, fleetApi }) => {
-    const result = await client.callTool({ name: 'boilerplate' });
+    const result = await client.callTool({ name: 'demo' });
     assert.equal(result.isError, undefined);
-    assert.match(result.content[0].text, /boilerplate workflow completed/);
+    assert.match(result.content[0].text, /demo workflow completed/);
     assert.ok(fleetApi.promptCalls.length >= 1, 'the agent phase should have run');
   });
 });
@@ -143,14 +143,14 @@ test('calling inspect-members with one member touches only that member', async (
   await withServer(undefined, async ({ client, fleetApi }) => {
     const result = await client.callTool({
       name: 'inspect-members',
-      arguments: { members: ['BOILERPLATE-DOER'] },
+      arguments: { members: ['DEMO-DOER'] },
     });
     assert.equal(result.isError, undefined);
     assert.equal(fleetApi.commandCalls.length, 1);
-    assert.equal(fleetApi.commandCalls[0].member_name, 'BOILERPLATE-DOER');
+    assert.equal(fleetApi.commandCalls[0].member_name, 'DEMO-DOER');
 
     const report = JSON.parse(result.content[0].text);
-    assert.deepEqual(report.members.map((entry) => entry.name), ['BOILERPLATE-DOER']);
+    assert.deepEqual(report.members.map((entry) => entry.name), ['DEMO-DOER']);
   });
 });
 

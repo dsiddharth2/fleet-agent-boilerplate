@@ -1,5 +1,5 @@
 import * as z from 'zod/v4';
-import { runBoilerplate } from '../workflows/boilerplate/main.mjs';
+import { runDemo } from '../workflows/demo/main.mjs';
 import { runInspectMembers } from '../workflows/inspect-members/main.mjs';
 
 // Routable workflows. To expose a new tool, append an entry here — no changes to
@@ -7,16 +7,16 @@ import { runInspectMembers } from '../workflows/inspect-members/main.mjs';
 // model when it decides which tool to call, so write it for that reader.
 export const defaultRegistry = [
   {
-    name: 'boilerplate',
+    name: 'demo',
     description:
-      'Runs the boilerplate demo workflow end to end: registers the BOILERPLATE members, ' +
+      'Runs the demo workflow end to end: registers the DEMO members, ' +
       'runs the dummy python command, the transform, and an agent smoke test. ' +
       'Choose this to run the demo workflow or to verify that Fleet plumbing works. ' +
       'Spends LLM tokens and can take a minute.',
     annotations: { readOnlyHint: false, idempotentHint: true },
     async run({ fleetApi, signal, reportPhase }) {
-      const result = await runBoilerplate({ fleetApi, signal, reportPhase });
-      return `boilerplate workflow completed: ${JSON.stringify(result)}`;
+      const result = await runDemo({ fleetApi, signal, reportPhase });
+      return `demo workflow completed: ${JSON.stringify(result)}`;
     },
   },
   {
@@ -27,10 +27,10 @@ export const defaultRegistry = [
       'member has been doing. Read-only and spends no LLM tokens.',
     inputSchema: z.object({
       members: z
-        .array(z.enum(['BOILERPLATE-DOER', 'BOILERPLATE-REVIEWER']))
+        .array(z.enum(['DEMO-DOER', 'DEMO-REVIEWER']))
         .optional()
         .describe(
-          'Member names to inspect. Defaults to BOILERPLATE-DOER and BOILERPLATE-REVIEWER.',
+          'Member names to inspect. Defaults to DEMO-DOER and DEMO-REVIEWER.',
         ),
       includeFiles: z
         .boolean()
