@@ -2,7 +2,7 @@
 set -eu
 
 # Same commands as a host provision. Docker entrypoint runs this after `apra-fleet start`.
-# Token comes from gitignored .token (bind-mounted) or CLAUDE_CODE_OAUTH_TOKEN (CI).
+# Token comes from CLAUDE_CODE_OAUTH_TOKEN and goes straight into Fleet's credential store.
 
 apra-fleet register-member --type local --llm claude \
   --name BOILERPLATE-DOER \
@@ -12,10 +12,8 @@ apra-fleet register-member --type local --llm claude \
   --name BOILERPLATE-REVIEWER \
   --path "$(pwd)/workdir/BOILERPLATE-REVIEWER" || true
 
-if [ -f .token ]; then
-  apra-fleet auth --oauth --member BOILERPLATE-DOER "$(tr -d '\r\n' < .token)"
-elif [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
   apra-fleet auth --oauth --member BOILERPLATE-DOER "$CLAUDE_CODE_OAUTH_TOKEN"
 else
-  echo "No .token file and CLAUDE_CODE_OAUTH_TOKEN is unset; skip auth." >&2
+  echo "CLAUDE_CODE_OAUTH_TOKEN is unset; skip auth. agent() calls will fail." >&2
 fi

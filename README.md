@@ -8,10 +8,8 @@ A batteries-included starter for building agents with [Apra Fleet](https://githu
 git clone https://github.com/dsiddharth2/fleet-agent-boilerplate.git
 cd fleet-agent-boilerplate
 
-# Provide an OAuth token for live agent() calls (pick one):
-claude setup-token > .token                    # gitignored file
-# — or —
-export CLAUDE_CODE_OAUTH_TOKEN="your-token"    # environment variable
+# Provide an OAuth token for live agent() calls:
+export CLAUDE_CODE_OAUTH_TOKEN="your-token"
 
 docker compose up
 ```
@@ -209,11 +207,10 @@ Four ideas explain most of the code:
 
 | Where | Purpose |
 |---|---|
-| `.token` (gitignored) | Input to `apra-fleet auth` / `provision-members.sh` |
-| `CLAUDE_CODE_OAUTH_TOKEN` env | Same as `.token`, for Docker / CI |
-| Fleet credential store | Where the token actually lives after provisioning |
+| `CLAUDE_CODE_OAUTH_TOKEN` env | Passed at startup, written into Fleet's credential store |
+| Fleet credential store | Where the token lives at runtime — Fleet spawns Claude, not your process |
 
-The OAuth token must be in Fleet's credential store on the member. The Fleet server spawns Claude — not your Node process — so exporting the token in your shell does not reach `agent()`. The entrypoint and provision script handle this automatically.
+The OAuth token goes directly into Fleet's credential store on the member at startup. The Fleet server spawns Claude — not your Node process — so the token must live in Fleet's store, not your shell environment. The entrypoint and provision script handle this automatically via `apra-fleet auth`.
 
 ---
 

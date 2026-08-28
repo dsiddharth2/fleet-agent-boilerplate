@@ -34,15 +34,14 @@ Live runs need both members registered and an OAuth token attached to the doer.
 `scripts/provision-members.sh` does exactly this, or run the commands yourself:
 
 ```bash
-claude setup-token          # paste the result into .token (gitignored)
-
 apra-fleet register-member --type local --llm claude \
   --name BOILERPLATE-DOER --path "$(pwd)/workdir/BOILERPLATE-DOER"
 
 apra-fleet register-member --type local --llm claude \
   --name BOILERPLATE-REVIEWER --path "$(pwd)/workdir/BOILERPLATE-REVIEWER"
 
-apra-fleet auth --oauth --member BOILERPLATE-DOER "$(tr -d '\r\n' < .token)"
+# Set the token directly in Fleet's credential store:
+apra-fleet auth --oauth --member BOILERPLATE-DOER "$(claude setup-token)"
 ```
 
 Three things bite people here. `--type local` is required — the default is remote and
@@ -175,7 +174,7 @@ prefix.
 
 ## Local state and git
 
-`.token`, `node_modules/`, `.claude/` (including the copies Fleet seeds inside
+`node_modules/`, `.claude/` (including the copies Fleet seeds inside
 `workdir/*/`), `.env`, `.cursor/` and leftover `.fleet/` / `.fleet-src/` directories are
 all gitignored. The `.claude/settings.local.json` files that appear under `workdir/`
 after registering members are machine state, not product source — leave them out of
@@ -202,13 +201,11 @@ claude mcp add --transport http fleet http://127.0.0.1:3000/mcp
 Pass an OAuth token for live `agent()` calls:
 
 ```bash
-# Option A: .token file (gitignored, bind-mounted)
-claude setup-token > .token
-docker compose up
-
-# Option B: environment variable
-CLAUDE_CODE_OAUTH_TOKEN="..." docker compose up
+CLAUDE_CODE_OAUTH_TOKEN="$(claude setup-token)" docker compose up
 ```
+
+The token is passed as an environment variable and written directly into Fleet's
+credential store at startup — nothing is saved to disk.
 
 Override the host port with `MCP_PORT`:
 
