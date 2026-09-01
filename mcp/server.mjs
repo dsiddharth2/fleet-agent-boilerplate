@@ -24,7 +24,7 @@ function makePhaseReporter(ctx) {
   };
 }
 
-export function buildMcpServer({ fleetApi, registry = defaultRegistry } = {}) {
+export function buildMcpServer({ fleetApi, pool, registry = defaultRegistry } = {}) {
   if (!fleetApi) {
     throw new Error('buildMcpServer requires fleetApi');
   }
@@ -41,6 +41,7 @@ export function buildMcpServer({ fleetApi, registry = defaultRegistry } = {}) {
       toToolResult(
         await entry.run({
           fleetApi,
+          pool,
           args,
           signal: ctx.mcpReq.signal,
           reportPhase: makePhaseReporter(ctx),

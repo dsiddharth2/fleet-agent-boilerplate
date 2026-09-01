@@ -1,10 +1,11 @@
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { WorkerPool } from '../pool/worker-pool.mjs';
 import { ensureApralabs } from '../workflows/demo/ensure-apralabs.mjs';
 import { createMcpHttpApp } from './http.mjs';
 import { buildMcpServer } from './server.mjs';
 
-export async function startMcpServer({ fleetApi, port } = {}) {
+export async function startMcpServer({ fleetApi, pool, port } = {}) {
   // Attach to `apra-fleet start` (where members + OAuth were provisioned) —
   // same reasoning as workflows/demo/main.mjs.
   if (!process.env.APRA_FLEET_TRANSPORT) {
@@ -29,7 +30,23 @@ export async function startMcpServer({ fleetApi, port } = {}) {
     }
   }
 
-  const app = createMcpHttpApp({ buildServer: () => buildMcpServer({ fleetApi: api }) });
+  // One pool per process, built once at startup rather than per request.
+  // A roster failure here is deliberately fatal: better a loud startup error
+  // than an agent() call failing deep inside a run.
+  let ownPool = null;
+  let activePool = pool;
+  if (!activePool) {
+    try {
+      activePool = ownPool = await WorkerPool.create({ fleetApi: api });
+    } catch (err) {
+      await transport?.stop?.();
+      throw err;
+    }
+  }
+
+  const app = createMcpHttpApp({
+    buildServer: () => buildMcpServer({ fleetApi: api, pool: activePool }),
+  });
   const listenPort = port ?? Number(process.env.PORT ?? 3000);
   // Bind loopback by default. Hosting this on a VM needs an explicit bind
   // address AND real authentication — see docs/mcp-interface.md.
@@ -58,6 +75,11 @@ export async function startMcpServer({ fleetApi, port } = {}) {
       }
     }
     try {
+      await ownPool?.close();
+    } catch {
+      // Preserve the listener error after best-effort pool cleanup.
+    }
+    try {
       await transport?.stop?.();
     } catch {
       // Preserve the listener error after best-effort Fleet cleanup.
@@ -68,6 +90,7 @@ export async function startMcpServer({ fleetApi, port } = {}) {
 
   const close = async () => {
     await new Promise((resolve) => server.close(resolve));
+    await ownPool?.close();
     transport?.stop?.();
   };
   return { server, close };
