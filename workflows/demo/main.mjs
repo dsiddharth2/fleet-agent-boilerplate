@@ -7,7 +7,7 @@ const engineScript = path.join(here, 'demo.js');
 
 export const selfExecuting = true;
 
-export async function runDemo({ fleetApi, signal, reportPhase } = {}) {
+export async function runDemo({ fleetApi, pool, signal, reportPhase } = {}) {
   // Attach to `apra-fleet start` (where members + OAuth were provisioned).
   // Unset transport would fall back to stdio spawn, which cannot find the
   // npm-global server layout and would also miss those members.
@@ -17,6 +17,8 @@ export async function runDemo({ fleetApi, signal, reportPhase } = {}) {
   ensureApralabs();
   const { FleetWorkflow } = await import('@apralabs/apra-fleet-workflow');
   const { WorkflowEngine } = await import('@apralabs/apra-fleet-workflow/engine');
+  const { WorkerPool } = await import('../../pool/worker-pool.mjs');
+  const { createPooledFleetApi } = await import('../../pool/pooled-fleet-api.mjs');
 
   let api = fleetApi;
   let transport = null;
@@ -34,11 +36,27 @@ export async function runDemo({ fleetApi, signal, reportPhase } = {}) {
     }
   }
 
+  // A caller that owns a pool passes it in; a direct CLI run builds its own.
+  let ownPool = null;
   try {
-    const workflow = new FleetWorkflow(api);
-    const engine = new WorkflowEngine(workflow);
-    return await engine.executeFile(engineScript, { fleetApi: api, signal, reportPhase });
+    const activePool = pool ?? (ownPool = await WorkerPool.create({ fleetApi: api }));
+    const lease = await activePool.acquire({ signal, reportPhase });
+    try {
+      const pooledApi = createPooledFleetApi(api, lease);
+      const workflow = new FleetWorkflow(pooledApi);
+      const engine = new WorkflowEngine(workflow);
+      return await engine.executeFile(engineScript, {
+        fleetApi: pooledApi,
+        workspace: { workerId: lease.workerId, doer: lease.doer, reviewer: lease.reviewer },
+        // The lease signal is the caller's signal plus lock-compromise.
+        signal: lease.signal,
+        reportPhase,
+      });
+    } finally {
+      await lease.release();
+    }
   } finally {
+    await ownPool?.close();
     transport?.stop?.();
   }
 }

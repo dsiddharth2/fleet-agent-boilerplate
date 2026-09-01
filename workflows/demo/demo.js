@@ -1,16 +1,13 @@
-import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const meta = { name: 'demo' };
 
-const DOER = 'DEMO-DOER';
-const REVIEWER = 'DEMO-REVIEWER';
-const here = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(here, '../..');
 const DUMMY_PY = fileURLToPath(new URL('./dummy.py', import.meta.url));
-const DOER_WORK = path.join(repoRoot, 'workdir', DOER);
-const REVIEWER_WORK = path.join(repoRoot, 'workdir', REVIEWER);
+
+// The engine loads this module once and shares it across concurrent runs
+// (Node's ESM cache), so module scope must stay immutable. Per-run state
+// belongs inside main().
 
 function toolText(result) {
   if (result == null) return '';
@@ -23,36 +20,6 @@ function toolText(result) {
     return JSON.stringify(result);
   } catch {
     return String(result);
-  }
-}
-
-function memberListedInStatus(statusText, name) {
-  return statusText.split(/[\n\r]/).some((line) => line.includes(name));
-}
-
-async function memberPresent(fleetApi, name) {
-  return memberListedInStatus(toolText(await fleetApi.fleetStatus()), name);
-}
-
-async function ensureMember(fleetApi, name, workFolder, log) {
-  fs.mkdirSync(workFolder, { recursive: true });
-  if (await memberPresent(fleetApi, name)) {
-    log(`${name} already present; skipping registration`);
-    return;
-  }
-  try {
-    await fleetApi.registerMember({
-      friendly_name: name,
-      work_folder: workFolder,
-      member_type: 'local',
-    });
-    log(`registered ${name}`);
-  } catch (err) {
-    if (await memberPresent(fleetApi, name)) {
-      log(`${name} already present; skipping registration`);
-      return;
-    }
-    throw err;
   }
 }
 
@@ -69,26 +36,19 @@ export async function main(context) {
   // is the one that matters, because that is the phase that spends tokens.
   const cancelled = () => signal?.aborted === true;
 
-  phase('register DEMO-DOER and DEMO-REVIEWER');
-  await reportPhase('registering members');
-  await ensureMember(fleetApi, DOER, DOER_WORK, log);
-  await ensureMember(fleetApi, REVIEWER, REVIEWER_WORK, log);
-  if (cancelled()) return { cancelled: true };
+  // 'doer' and 'reviewer' are reserved keywords; the pool resolves them to this
+  // run's own members. Never name a member directly.
+  log(`running on worker-${args.workspace?.workerId} as ${args.workspace?.doer?.name}`);
 
   phase('status');
   await reportPhase('reading fleet status');
-  const status = await fleetApi.fleetStatus();
-  const statusText = toolText(status);
-  const hasDoer = statusText.includes(DOER);
-  const hasReviewer = statusText.includes(REVIEWER);
-  log(`fleet status: ${DOER}=${hasDoer ? 'present' : 'missing'}, ${REVIEWER}=${hasReviewer ? 'present' : 'missing'}`);
-  log(statusText);
+  log(toolText(await fleetApi.fleetStatus()));
   if (cancelled()) return { cancelled: true };
 
   phase('python command');
   await reportPhase('running the python command');
   const cmdResult = await command(`python3 "${DUMMY_PY}"`, {
-    member_name: DOER,
+    member_name: 'doer',
     failSoft: true,
   });
   log(`command result: ${typeof cmdResult === 'string' ? cmdResult : JSON.stringify(cmdResult)}`);
@@ -103,7 +63,7 @@ export async function main(context) {
   phase('agent smoke');
   await reportPhase('dispatching the agent prompt');
   if (cancelled()) return { cancelled: true, command: cmdResult, transform: payload };
-  const reply = await agent('Reply with exactly: pong', { member_name: DOER });
+  const reply = await agent('Reply with exactly: pong', { member_name: 'doer' });
   log(`agent result: ${reply}`);
 
   return { command: cmdResult, transform: payload, agent: reply };
