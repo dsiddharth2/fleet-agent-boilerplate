@@ -17,7 +17,7 @@ function asText(value) {
 }
 
 test(
-  'live runDemo runs python command and agent on DEMO-DOER',
+  'live runDemo runs python command and agent on a pooled worker',
   { timeout: 180_000 },
   async () => {
     const result = await runDemo();
