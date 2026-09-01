@@ -22,7 +22,11 @@ for arg in "$@"; do
 done
 
 if [ "$skip_provision" -eq 0 ]; then
-  mkdir -p /workspace/workdir/DEMO-DOER /workspace/workdir/DEMO-REVIEWER
+  i=1
+  while [ "$i" -le "${WORKER_POOL_SIZE:-4}" ]; do
+    mkdir -p "/workspace/workdir/worker-${i}/doer" "/workspace/workdir/worker-${i}/reviewer"
+    i=$((i + 1))
+  done
 
   echo "[entrypoint] starting Fleet server..."
   apra-fleet start
