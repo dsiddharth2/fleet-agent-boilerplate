@@ -116,11 +116,22 @@ that always answers "absent":
 purpose-built call. The pool depends on a correct roster, so fixing these three
 sites is in scope for this change rather than deferred.
 
-### 2. The pool owns registration
+Name matching must be token-exact, not substring: `WORKER-1-DOER` is a substring
+of `WORKER-11-DOER`, so a naive `includes()` check reports a missing worker as
+present once N reaches double digits.
 
-At construction, for `i` in `1..N` and each role: create the folder, then
-register the member if `listMembers()` does not already show it. Workflow bodies
-register nothing; `ensureMember` leaves `demo.js` entirely.
+### 2. Provisioning registers; the pool only verifies
+
+`scripts/provision-members.sh` creates the folders and registers all 2N members.
+At construction the pool calls `listMembers()` once and checks every expected
+member is present, creating any missing folder defensively; it never calls
+`registerMember`. Workflow bodies register nothing, and `ensureMember` leaves
+`demo.js` entirely.
+
+Keeping registration in one place — the script that also attaches OAuth (see
+decision 4) — is what makes decision 3's fail-fast check meaningful. A pool that
+registered members itself would paper over exactly the drift that check exists
+to catch, and would still leave the new member without credentials.
 
 ### 3. Startup fails fast; it does not silently self-heal
 
