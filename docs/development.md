@@ -30,18 +30,27 @@ is intentional — Fleet is a machine install, not a project dependency.
 
 ### Provisioning members
 
-Live runs need both members registered and an OAuth token attached to the doer.
-`scripts/provision-members.sh` does exactly this, or run the commands yourself:
+Live runs need `WORKER_POOL_SIZE` (default 4) worker pairs registered and an OAuth
+token attached to **every** role. `scripts/provision-members.sh` does exactly this.
+Changing `WORKER_POOL_SIZE` requires re-running that script — the pool verifies the
+roster at startup and refuses to start if a worker is missing.
+
+```bash
+WORKER_POOL_SIZE=4 scripts/provision-members.sh
+```
+
+Or the equivalent by hand:
 
 ```bash
 apra-fleet register-member --type local --llm claude \
-  --name DEMO-DOER --path "$(pwd)/workdir/DEMO-DOER"
+  --name WORKER-1-DOER --path "$(pwd)/workdir/worker-1/doer"
 
 apra-fleet register-member --type local --llm claude \
-  --name DEMO-REVIEWER --path "$(pwd)/workdir/DEMO-REVIEWER"
+  --name WORKER-1-REVIEWER --path "$(pwd)/workdir/worker-1/reviewer"
 
-# Set the token directly in Fleet's credential store:
-apra-fleet auth --oauth --member DEMO-DOER "$(claude setup-token)"
+# Repeat for each i in 1..N. Set the token on every role:
+apra-fleet auth --oauth --member WORKER-1-DOER "$(claude setup-token)"
+apra-fleet auth --oauth --member WORKER-1-REVIEWER "$(claude setup-token)"
 ```
 
 Three things bite people here. `--type local` is required — the default is remote and
@@ -58,12 +67,12 @@ by your process. Re-run the `auth` command when you see `OAuth session expired`.
 | `node --test tests/demo.test.mjs` | no | no |
 | `node --test tests/inspect-members.test.mjs` | no | no |
 | `node --test tests/mcp.test.mjs` | no | no |
+| `node --test tests/pool-*.test.mjs` | no | no |
 | `node --test tests/mcp.live.test.mjs` | yes | no |
 | `node --test tests/demo.live.test.mjs` | yes | yes |
 | `node workflows/demo/main.mjs` | yes | yes |
 | `npm run mcp` | yes | only for `demo` |
 | `python3 workflows/demo/dummy.py` | no | no |
-| `python3 workflows/inspect-members/inspect.py --root workdir/DEMO-DOER`  | no | no |
 
 A successful live workflow run prints `agent result: pong` and **returns to the shell**
 with exit 0. If it prints `pong` and hangs, the transport was not stopped — check the
@@ -84,20 +93,22 @@ configuration.
 
 Tests split by what they need, and the split is the point.
 
-**Mock tests** (`tests/demo.test.mjs`, `tests/inspect-members.test.mjs`) run
-anywhere — no Fleet server, no members, no tokens, no network. They work because the
-launchers accept an injected `fleetApi`.
+**Mock tests** (`tests/demo.test.mjs`, `tests/inspect-members.test.mjs`, and the
+`tests/pool-*.test.mjs` files) run anywhere — no Fleet server, no members, no tokens,
+no network. They work because the launchers accept an injected `fleetApi` and an
+optional `pool`, and because `WORKER_POOL_ROOT` can point the folders and `.locks` at a
+tmpdir.
 
 `tests/mcp.test.mjs` also needs no Fleet server or token. It drives a real MCP client
 over a real ephemeral port against the HTTP application, with Fleet mocked underneath.
 These three files are what `npm test` runs, and what you should run constantly.
 
-The mock is a hand-written object implementing the four MCP methods the code actually
-uses (`registerMember`, `fleetStatus`, `executeCommand`, `executePrompt`) and recording
-its calls. It returns realistic MCP envelopes — `content[]` plus `structuredContent` —
-so the text-extraction paths get exercised rather than bypassed. Because
-`fleetStatus()` is derived from what was registered, the mock can assert genuinely
-useful behavior, such as a second `runDemo()` not re-registering members.
+The mock is a hand-written object implementing the MCP methods the code actually
+uses (`listMembers`, `fleetStatus`, `registerMember`, `executeCommand`, `executePrompt`)
+and recording its calls. It returns realistic MCP envelopes — `content[]` plus
+`structuredContent` — so the text-extraction paths get exercised rather than bypassed.
+`listMembers()` is the call the pool verifies its roster with; a mock that answered
+member names from `fleetStatus()` would hide a real bug.
 
 **Live tests** split further. `tests/mcp.live.test.mjs` exercises the MCP server against
 a live Fleet without spending tokens. `tests/demo.live.test.mjs` runs the full
@@ -122,7 +133,7 @@ a body file that only knows how to do the work given the engine `context`. The e
 function must accept `{ fleetApi }` so it stays testable.
 
 ```js
-export async function runMyWorkflow({ fleetApi } = {}) {
+export async function runMyWorkflow({ fleetApi, pool } = {}) {
   if (!process.env.APRA_FLEET_TRANSPORT) {
     process.env.APRA_FLEET_TRANSPORT = 'http';
   }
@@ -143,8 +154,8 @@ in `mcp/registry.mjs`:
   description: 'What this does and when a model should choose it.',
   inputSchema: z.object({ target: z.string().describe('What to act on') }),
   annotations: { readOnlyHint: true },
-  async run({ fleetApi, args, signal, reportPhase }) {
-    return await runMyWorkflow({ fleetApi, signal, reportPhase, target: args.target });
+  async run({ fleetApi, pool, args, signal, reportPhase }) {
+    return await runMyWorkflow({ fleetApi, pool, signal, reportPhase, target: args.target });
   },
 }
 ```
@@ -154,13 +165,20 @@ be unique, `inputSchema` must be a `z.object(...)`, and omitting `inputSchema` d
 a no-argument tool. Write `description` for the connected model deciding whether to
 choose the tool. A thrown `run` automatically becomes an MCP `isError` result.
 
-**4. Register new members if you need them.** Each gets its own folder under `workdir/`,
-and its own `register-member` call in `scripts/provision-members.sh`. Use unique names —
-a shared Fleet server may host other projects, and `DEMO-*` is only a dummy
-prefix.
+**4. Do not register members from the workflow.** Provisioning owns registration and
+OAuth. Address members by the role keywords `'doer'` and `'reviewer'`; the pool
+resolves them to the worker assigned to that run. Raising `WORKER_POOL_SIZE` and
+re-running `scripts/provision-members.sh` is how you add capacity, not new names in
+workflow bodies.
 
 ## Conventions
 
+- **Address members by role, never by name.** Pass `'doer'` or `'reviewer'` as
+  `member_name`; the pool resolves them to the worker assigned to your run.
+- **Keep workflow module scope immutable.** The engine loads your body once with
+  `import()` and Node's ESM cache shares that instance across every concurrent
+  run, so a module-level `let`, counter, or cache is shared between runs on
+  different workers. Per-run state belongs inside `main()`.
 - **ESM everywhere.** `"type": "module"`, `.mjs` for launchers and MCP modules.
 - **`node:test` and `node:assert/strict`.** No test framework dependency.
 - **No `@apralabs/*` in `package.json`.** Fleet resolves through the symlink.
@@ -244,7 +262,7 @@ Linux-native dependencies.
 | `Cannot find package 'undici'` | Stale `node_modules/@apralabs` symlink. `ensureApralabs()` checks `~/.apra-fleet/node_modules` first, then the npm global prefix; delete any leftover `.fleet-src`. |
 | `"host" is required for remote members` | Add `--type local` to `register-member`. |
 | `Member "…" not found` on `auth` | Register the member before authenticating it. |
-| `OAuth session expired` | `claude setup-token`, then re-run `apra-fleet auth --oauth --member DEMO-DOER …`. |
+| `OAuth session expired` | `claude setup-token`, then re-run `apra-fleet auth --oauth --member WORKER-1-DOER …`. |
 | Live run prints `pong` but never exits | Transport not stopped — check the launcher's `finally`. |
 | A tool is never chosen | Improve its registry `description` so the connected model knows when to use it. |
 | A tool call times out | Set `"timeout"` in that server's `.mcp.json` entry. |

@@ -46,6 +46,9 @@ You only write two things:
 - **Workflow bodies** — the actual work your agents do (`workflows/`)
 - **Tool entries** — one entry per workflow in the MCP registry (`mcp/registry.mjs`)
 
+Member identity, concurrent-run safety, provisioning, Docker, and mock tests are
+already in the kit. The only remaining design work per project is the workflow itself.
+
 ---
 
 ## Writing your first workflow
@@ -68,9 +71,9 @@ export async function main(context) {
   const { command, agent, log } = context;
 
   log('running analysis');
-  const data = await command('python3 analyze.py', { member_name: 'MY-DOER' });
+  const data = await command('python3 analyze.py', { member_name: 'doer' });
 
-  const reply = await agent('Summarize this data', { member_name: 'MY-DOER' });
+  const reply = await agent('Summarize this data', { member_name: 'doer' });
   return { data, reply };
 }
 ```
@@ -79,7 +82,7 @@ The launcher owns connection and cleanup. Copy the pattern from `workflows/demo/
 
 ```js
 // workflows/my-workflow/main.mjs
-export async function runMyWorkflow({ fleetApi } = {}) {
+export async function runMyWorkflow({ fleetApi, pool } = {}) {
   if (!process.env.APRA_FLEET_TRANSPORT) {
     process.env.APRA_FLEET_TRANSPORT = 'http';
   }
@@ -97,24 +100,20 @@ Append one entry to `mcp/registry.mjs`:
   name: 'my-workflow',
   description: 'What this does and when a model should choose it.',
   inputSchema: z.object({ target: z.string().describe('What to act on') }),
-  async run({ fleetApi, args, signal, reportPhase }) {
-    return await runMyWorkflow({ fleetApi, target: args.target, signal, reportPhase });
+  async run({ fleetApi, pool, args, signal, reportPhase }) {
+    return await runMyWorkflow({ fleetApi, pool, target: args.target, signal, reportPhase });
   },
 }
 ```
 
 No changes to `server.mjs` or `http.mjs` needed — the registry is data.
 
-### 3. Register your members
+### 3. Capacity is already provisioned
 
-Add your members to `scripts/provision-members.sh`:
-
-```bash
-apra-fleet register-member --type local --llm claude \
-  --name MY-DOER --path "$(pwd)/workdir/MY-DOER"
-```
-
-Create matching folders under `workdir/`. Each member needs its own folder — two members sharing a `cwd` will collide.
+`scripts/provision-members.sh` registers `WORKER_POOL_SIZE` (default 4) doer+reviewer
+pairs and attaches OAuth to every role. Workflow bodies address them as `'doer'` and
+`'reviewer'` — never by the `WORKER-{i}-*` names. To run more jobs at once, raise
+`WORKER_POOL_SIZE` and re-run the provision script.
 
 ### 4. Run it
 
@@ -167,7 +166,9 @@ npm test                                                              # all mock
 docker compose run --rm fleet node --test tests/demo.test.mjs         # in Docker
 ```
 
-The mock tests inject a fake `fleetApi` and assert real behavior — member registration, command dispatch, agent calls. Write mock tests first when adding workflows.
+The mock tests inject a fake `fleetApi` and an optional pool and assert real behavior —
+role-keyword remapping, command dispatch, agent calls, queueing. Write mock tests first
+when adding workflows.
 
 Live tests need a running Fleet server and a token:
 
@@ -186,26 +187,30 @@ node --test tests/mcp.live.test.mjs         # MCP server against live Fleet
 │                                                             │
 │   mcp/             POST /mcp — one MCP tool per registry    │
 │     │              entry. Claude chooses from descriptions.  │
-│     │ entry.run({ fleetApi, args, signal, reportPhase })    │
+│     │              One WorkerPool per process, built at start│
+│     │ entry.run({ fleetApi, pool, args, signal, reportPhase })│
 │     ▼                                                       │
-│   workflows/       runDemo() — connect + execute             │
-│     │              Your workflow bodies live here.           │
+│   workflows/       launcher acquires a lease, wraps fleetApi │
+│     │              body uses 'doer' / 'reviewer' keywords    │
+│     ▼                                                       │
+│   pool/            shared worker pairs + file locks          │
 └─────┼───────────────────────────────────────────────────────┘
       │ MCP over HTTP
       ▼
 ┌─────────────────────────────────────────────────────────────┐
 │  Fleet server        http://127.0.0.1:7523/mcp              │
 │                                                             │
-│   YOUR-DOER                     YOUR-REVIEWER               │
-│   workdir/YOUR-DOER/            workdir/YOUR-REVIEWER/      │
-│   Claude Code + OAuth           registered, ready            │
+│   WORKER-1-DOER / WORKER-1-REVIEWER   …   WORKER-N-*        │
+│   workdir/worker-1/{doer,reviewer}/   …   workdir/worker-N/ │
+│   Claude Code + OAuth on every role                         │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-Four ideas explain most of the code:
+Five ideas explain most of the code:
 
-- **Launcher / body split.** `main.mjs` owns connection, transport and cleanup; the `.js` body only does the work. That is what keeps bodies testable.
+- **Launcher / body split.** `main.mjs` owns connection, pool acquire/release, transport and cleanup; the `.js` body only does the work. That is what keeps bodies testable.
 - **`fleetApi` is injected.** Launchers connect only when no client is passed in, so mock tests run with no server and no tokens.
+- **Members are a pool, not names you pick.** Workflows pass `'doer'` / `'reviewer'`; the pool assigns a `WORKER-{i}-*` pair for the run. Concurrent calls cannot share a folder.
 - **Fleet is a machine install, not a dependency.** `ensureApralabs()` symlinks `node_modules/@apralabs` to the Fleet install. No `@apralabs/*` in `package.json`.
 - **Transport is pinned to `http`.** Left unset, the client would spawn Fleet over stdio and miss your provisioned members.
 
@@ -219,7 +224,7 @@ Fleet spawns Claude (not your Node process), so the token must live in Fleet's s
 ### Local development
 
 ```bash
-apra-fleet auth --oauth --member DEMO-DOER "$(claude setup-token)"
+apra-fleet auth --oauth --member WORKER-1-DOER "$(claude setup-token)"
 ```
 
 `claude setup-token` opens a browser login and outputs the token. `apra-fleet auth`
@@ -259,6 +264,9 @@ in Fleet's in-memory credential store.
 | `CLAUDE_CODE_OAUTH_TOKEN` | — | OAuth token for live `agent()` calls |
 | `MCP_PORT` | `3000` | Host port mapped to the MCP server |
 | `MCP_BIND_HOST` | `0.0.0.0` (compose) / `127.0.0.1` (local) | MCP server bind address |
+| `WORKER_POOL_SIZE` | `4` | Number of doer+reviewer worker pairs. Re-provision after changing. |
+| `WORKER_POOL_ROOT` | `<repo>/workdir` | Where worker folders and `.locks` live. Tests point this at a tmpdir. |
+| `WORKER_POOL_ACQUIRE_TIMEOUT_MS` | `300000` | How long a call waits for a free worker before failing. |
 
 Override the host port:
 
@@ -272,15 +280,22 @@ MCP_PORT=4000 docker compose up
 
 ```text
 workflows/
-  demo/                 # demo workflow — replace with your own
-    main.mjs            # launcher: connectFleet, execute, exit
-    demo.js             # body: register, status, command, transform, agent
+  demo/                 # demo workflow — replace the body with your own
+    main.mjs            # launcher: connectFleet, acquire lease, execute, release
+    demo.js             # body: status, command, transform, agent — uses 'doer'
     dummy.py            # stand-in for real Python work
     ensure-apralabs.mjs # symlinks @apralabs packages from Fleet install
-  inspect-members/      # read-only member inspection workflow
-    main.mjs, inspect-members.js, inspect.py
+  inspect-members/      # observational pool/folder inspection (no member session)
+    main.mjs, inspect-members.js
+pool/
+  roster.mjs            # WORKER-{i}-* names, folders, poolConfig()
+  worker-lock.mjs       # cross-process proper-lockfile wrapper
+  cleanup.mjs           # wipe work folders, preserve .claude/
+  worker-pool.mjs       # acquire/release, FIFO queue, heartbeats, leases
+  pooled-fleet-api.mjs  # remaps 'doer'/'reviewer' to the leased members
+  fleet-text.mjs        # token-exact listMembers() matching
 mcp/
-  main.mjs              # MCP server launcher, configurable bind address
+  main.mjs              # MCP server launcher, builds one pool at startup
   server.mjs            # one MCP tool per registry entry
   http.mjs              # stateless POST /mcp and GET /health
   registry.mjs          # tool catalog — add your workflows here
@@ -288,13 +303,13 @@ mcp/
   fleet-text.mjs        # extract text from Fleet MCP results
 scripts/
   docker-entrypoint.sh  # start Fleet, install deps, provision, exec
-  provision-members.sh  # register members + attach OAuth
+  provision-members.sh  # register 2N workers + attach OAuth to every role
 tests/                  # mock and live test suites
-workdir/                # member working directories (one per member)
+workdir/                # worker folders + .locks (gitignored runtime state)
 docs/
-  architecture.md       # layers, data flow, design decisions
-  development.md        # setup, testing, conventions
-  mcp-interface.md      # MCP tool reference, timeouts, auth, hosting
+  architecture.md       # layers, pool, data flow, design decisions
+  development.md        # setup, testing, adding workflows, conventions
+  mcp-interface.md      # MCP tool reference, timeouts, queueing, auth, hosting
 Dockerfile
 docker-compose.yml
 ```
@@ -305,6 +320,8 @@ docker-compose.yml
 
 | Symptom | Fix |
 |---|---|
+| `These worker members are not registered: …` | `WORKER_POOL_SIZE` changed without re-provisioning. Run `scripts/provision-members.sh`. |
+| `all N workers busy, try again` | Pool saturated for longer than `WORKER_POOL_ACQUIRE_TIMEOUT_MS`. Raise `WORKER_POOL_SIZE` or retry. |
 | `connectFleet() failed` | Fleet server is down. `apra-fleet start`, then retry. |
 | `"host" is required for remote members` | Add `--type local` to `register-member`. |
 | `Member "…" not found` on `auth` | Register the member first, then `auth`. |

@@ -29,15 +29,15 @@ default.
 
 | Tool | Arguments | Behavior |
 |---|---|---|
-| `demo` | None | Runs the complete demo, including the agent smoke test. It spends LLM tokens and is not read-only. |
-| `inspect-members` | `members`, `includeFiles` | Reports member registration and work-folder information. It is read-only and spends no LLM tokens. |
+| `demo` | None | Runs the complete demo on a pooled worker, including the agent smoke test. It spends LLM tokens, queues when every worker is busy, and is not read-only. |
+| `inspect-members` | `workers`, `includeFiles` | Reports which workers are busy and since when, and what is in each work folder. It is read-only, takes no worker, and spends no LLM tokens. |
 
 `inspect-members` accepts:
 
-- `members`: optional array of member names. It defaults to `DEMO-DOER` and
-  `DEMO-REVIEWER`.
-- `includeFiles`: optional boolean. When true, include a capped top-level directory
-  listing for each member.
+- `workers`: optional array of worker numbers (1-indexed). Defaults to every worker
+  in the pool. Validated against the live pool size inside `run()`.
+- `includeFiles`: optional boolean. When true, include a listing of top-level entries
+  in each work folder.
 
 ## Registry contract
 
@@ -49,7 +49,7 @@ default.
   description,
   inputSchema?,
   annotations?,
-  async run({ fleetApi, args, signal, reportPhase }) {
+  async run({ fleetApi, pool, args, signal, reportPhase }) {
     // Return the final value shown to the model.
   },
 }
@@ -71,6 +71,12 @@ tool result. A heartbeat is a progress notification produced by `reportPhase`.
 
 The heartbeat only fires when the client requests progress by sending a progress token.
 It is not a substitute for configuring enough client time for a slow workflow.
+
+A tool call that finds every worker busy waits in a FIFO queue, sending a
+progress heartbeat immediately and then every 30 seconds with its position.
+After `WORKER_POOL_ACQUIRE_TIMEOUT_MS` (default 5 minutes) it fails with
+"all N workers busy, try again" rather than being killed by a transport timeout.
+Heartbeats only fire when the client sent a progress token.
 
 ### Timeouts
 
@@ -125,14 +131,13 @@ Use TLS and a real secret manager for any network-accessible deployment.
 ## Output limits
 
 Claude Code warns when MCP output exceeds 10,000 tokens and truncates it at 25,000
-tokens. `MAX_MCP_OUTPUT_TOKENS` controls the truncation limit. Independently,
-`workflows/inspect-members/inspect.py` caps its directory listing at 50 entries.
+tokens. `MAX_MCP_OUTPUT_TOKENS` controls the truncation limit.
 
 ## Troubleshooting
 
 | Symptom | Fix |
 |---|---|
 | `connectFleet() failed` | Start Fleet with `apra-fleet start`, then restart the MCP server. |
-| `OAuth session expired` | Re-authenticate `DEMO-DOER` in Fleet's credential store. |
+| `OAuth session expired` | Re-authenticate the worker members in Fleet's credential store. |
 | A tool is not chosen | Improve its `description` in `mcp/registry.mjs` so the model knows when to use it. |
 | A tool call times out | Set `"timeout"` in that server's `.mcp.json` entry; use `600000` for a ten-minute allowance. |
