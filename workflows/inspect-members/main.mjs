@@ -11,20 +11,37 @@ export const selfExecuting = true;
 
 export async function runInspectMembers({
   fleetApi,
-  members,
+  workers,
   includeFiles,
   signal,
   reportPhase,
 } = {}) {
-  // Attach to `apra-fleet start` (where members were provisioned). Unset
-  // transport would fall back to a stdio spawn that cannot see them.
   if (!process.env.APRA_FLEET_TRANSPORT) {
     process.env.APRA_FLEET_TRANSPORT = 'http';
   }
   ensureApralabs();
   const { FleetWorkflow } = await import('@apralabs/apra-fleet-workflow');
   const { WorkflowEngine } = await import('@apralabs/apra-fleet-workflow/engine');
+  const { buildRoster, poolConfig } = await import('../../pool/roster.mjs');
 
+  const config = poolConfig();
+  const fullRoster = buildRoster(config);
+
+  // Validated here rather than in the MCP schema: the pool is sized at runtime
+  // from the environment, so the valid set is not known when the schema is built.
+  let roster = fullRoster;
+  if (Array.isArray(workers) && workers.length > 0) {
+    for (const id of workers) {
+      if (!Number.isInteger(id) || id < 1 || id > fullRoster.length) {
+        throw new Error(`Unknown worker ${String(id)}: the pool has ${fullRoster.length} workers`);
+      }
+    }
+    roster = fullRoster.filter((worker) => workers.includes(worker.id));
+  }
+
+  // Observational only: it takes no lease and needs no Fleet connection for the
+  // folder or lock reads. fleetApi is still accepted so the launcher signature
+  // matches every other workflow.
   let api = fleetApi;
   let transport = null;
   if (!api) {
@@ -42,19 +59,11 @@ export async function runInspectMembers({
   }
 
   try {
-    // WorkflowEngine consumes failSoft before dispatch. Keep it observable to
-    // injected APIs without letting FleetApi serialize it into the MCP payload.
-    const workflowApi = {
-      executeCommand(options) {
-        Object.defineProperty(options, 'failSoft', { value: true, enumerable: false });
-        return api.executeCommand(options);
-      },
-    };
-    const workflow = new FleetWorkflow(workflowApi);
+    const workflow = new FleetWorkflow(api);
     const engine = new WorkflowEngine(workflow);
     return await engine.executeFile(engineScript, {
       fleetApi: api,
-      members,
+      roster,
       includeFiles,
       signal,
       reportPhase,
