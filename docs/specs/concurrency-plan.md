@@ -2184,16 +2184,7 @@ git commit -m "feat: provision N worker pairs and authorize every role"
 git rm -r workdir/DEMO-DOER workdir/DEMO-REVIEWER workdir/BOILERPLATE-DOER workdir/BOILERPLATE-REVIEWER
 ```
 
-- [ ] **Step 2: Fix the stale git remote**
-
-```bash
-git remote set-url origin git@github.com:dsiddharth2/workflow-kit.git
-git remote -v
-```
-
-Expected: both lines show `workflow-kit.git`.
-
-- [ ] **Step 3: Update `docs/architecture.md`**
+- [ ] **Step 2: Update `docs/architecture.md`**
 
 In the "Member" paragraph, replace *"This repo registers two: `DEMO-DOER` and `DEMO-REVIEWER`"* with:
 
@@ -2208,7 +2199,7 @@ In the "Work folder" paragraph, replace the `workdir/DEMO-*` sentence with `work
 
 Add a `### pool/` subsection to the "Module map" listing the five modules and their responsibilities, and a "Concurrency" subsection under "Design decisions worth knowing" summarising: one lease per run, cross-process file locks, cleanup on acquire and release, fail-fast roster verification.
 
-- [ ] **Step 4: Update `docs/development.md`**
+- [ ] **Step 3: Update `docs/development.md`**
 
 In "Provisioning members", document `WORKER_POOL_SIZE` and that changing it requires re-running `scripts/provision-members.sh`.
 
@@ -2223,7 +2214,7 @@ Add to "Conventions":
   different workers. Per-run state belongs inside `main()`.
 ```
 
-- [ ] **Step 5: Update `docs/mcp-interface.md`**
+- [ ] **Step 4: Update `docs/mcp-interface.md`**
 
 In the tool catalog, update `inspect-members` to take `workers?: number[]` and describe the busy/heldSince report. Add a "Queueing" note under "Execution model":
 
@@ -2235,7 +2226,7 @@ After `WORKER_POOL_ACQUIRE_TIMEOUT_MS` (default 5 minutes) it fails with
 Heartbeats only fire when the client sent a progress token.
 ```
 
-- [ ] **Step 6: Update `README.md`**
+- [ ] **Step 5: Update `README.md`**
 
 Replace `DEMO-DOER`/`DEMO-REVIEWER` mentions with the worker naming, add the three `WORKER_POOL_*` variables to the environment table, and update the troubleshooting table with:
 
@@ -2244,7 +2235,7 @@ Replace `DEMO-DOER`/`DEMO-REVIEWER` mentions with the worker naming, add the thr
 | `These worker members are not registered: …` | `WORKER_POOL_SIZE` changed without re-provisioning. Run `scripts/provision-members.sh`. |
 | `all N workers busy, try again` | Pool saturated for longer than `WORKER_POOL_ACQUIRE_TIMEOUT_MS`. Raise `WORKER_POOL_SIZE` or retry. |
 
-- [ ] **Step 7: Verify the whole suite and grep for stale references**
+- [ ] **Step 6: Verify the whole suite and grep for stale references**
 
 Run: `npm test`
 Expected: PASS
@@ -2252,7 +2243,7 @@ Expected: PASS
 Run: `grep -rn "DEMO-DOER\|DEMO-REVIEWER\|BOILERPLATE-" --exclude-dir=node_modules --exclude-dir=.git .`
 Expected: matches only inside `docs/specs/` (the spec's own history sections)
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add -A

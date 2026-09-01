@@ -351,8 +351,6 @@ the documented upgrade path.
 
 - `DEMO-DOER` / `DEMO-REVIEWER` retire; `workdir/DEMO-*` is removed.
 - Dead `workdir/BOILERPLATE-*` folders are deleted (zero references anywhere).
-- `origin` is repointed from `fleet-agent-boilerplate.git` to `workflow-kit.git`,
-  matching the README's own clone instructions.
 - `README.md`, `docs/architecture.md` (its "Member" and "Work folder" sections
   both name the two demo members), `docs/mcp-interface.md`, and
   `docs/development.md` move to the role-keyword convention.
